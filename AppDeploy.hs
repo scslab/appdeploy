@@ -4,6 +4,8 @@ import System.Posix.Process
 import System.Posix.Unistd
 import System.Posix.Types
 import Control.Concurrent
+import Data.List.Split
+import Control.Concurrent.Spawn
 
 -- Step 1
 -- taskctl /path/to/app [arg1 [arg2 [arg3]]]
@@ -25,28 +27,42 @@ import Control.Concurrent
 main = do 
     putStrLn "hello"
 
-taskctl :: String -> IO a
+parseEnv :: FilePath -> IO (Maybe [(String, String)])
+parseEnv envFile = do
+    envString <- readFile envFile
+    let varList = lines envString
+    return $ Just $ map (\line -> ((head $ splitOn "=" line) ,(last $ splitOn "=" line))) varList  
+
+--readProcesses :: FilePath -> IO a 
+readProcesses descriptionFile = do
+        processesString <- readFile descriptionFile 
+        let processList = lines processesString
+        mapM taskctl processList
+
+taskctl :: String -> IO ThreadId
 taskctl cline = do
     let entries = splitOn " " cline
     let command = head entries
     let args = tail entries
-
+    env <- parseEnv ".env"
+    startApp command False args env
 
 startApp :: FilePath             -- ^ Command
             -> Bool             -- ^ Search PATH?
             -> [String]             -- ^ Arguments
             -> Maybe [(String, String)]     -- ^ Environment
-            -> IO a
+            -> IO ThreadId
 startApp command spath args env  = forkIO $ go
-        where go =
-            err <- spawn command spath args env
-            case err of
-                STATUS_OK -> return
-                _ -> do
-                    print err
-                    go
-        pid <- forkProcess (executeFile command spath args env) 
-        checkStatus pid command spath args env
+        where go = do
+                err1 <- spawn (executeFile command spath args env)
+                err <- err1
+                case err of
+                    0 -> return
+                    _ -> do
+                        print err
+                        go
+        --pid <- forkProcess (executeFile command spath args env) 
+        --checkStatus pid command spath args env
 
 
 checkStatus :: ProcessID
@@ -54,7 +70,7 @@ checkStatus :: ProcessID
             -> Bool             -- ^ Search PATH?
             -> [String]             -- ^ Arguments
             -> Maybe [(String, String)]     -- ^ Environment
-            -> IO a
+            -> IO ThreadId
 checkStatus pid command spath args env = do
     pstatus <- getProcessStatus False True pid
     case pstatus of
