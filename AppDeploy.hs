@@ -40,7 +40,7 @@ import Control.Monad
 --ht :: IORef (H.HashTable Int Int)
 {-# NOINLINE ht #-}
 ht = do
-  h <- H.new (==) (H.hashString . show)
+  h <- H.new (==) H.hashString
   return $ unsafePerformIO $ newIORef h
 
 
@@ -85,10 +85,12 @@ startApp command spath args env  = forkIO $ go
         where go = do
                 ht1 <- ht
                 ht2 <- readIORef ht1
-                H.insert ht2 1 2
-                (Just x) <- H.lookup ht2 1
-                putStrLn (show x)
+                success <- H.update ht2 (show command) "running"
+                if not success
+                then  H.insert ht2 (show command) "running"
+                else return ()
                 err1 <- spawn (executeFile command spath args env)
+                H.update ht2 (show command) "down"
                 err <- err1
                 --case err of
                 --    0 -> return
@@ -119,4 +121,4 @@ respondStatuses h = do
     ht1 <- ht
     ht2 <- readIORef ht1
     statusList <- H.toList ht2 
-    hPutStrLn h (show (statusList :: [(ProcessID,String)]))                
+    hPutStrLn h (show (statusList :: [(String, String)]))                
