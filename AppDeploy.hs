@@ -11,6 +11,10 @@ import Control.Concurrent.Spawn
 import System.IO.Unsafe
 --import qualified Data.HashTable.IO as H
 import qualified Data.HashTable as H
+import Network
+import System.IO
+import Control.Exception
+import Control.Monad
 
 
 -- Step 1
@@ -36,12 +40,13 @@ import qualified Data.HashTable as H
 --ht :: IORef (H.HashTable Int Int)
 {-# NOINLINE ht #-}
 ht = do
-  h <- H.new (==) H.hashInt
+  h <- H.new (==) (H.hashString . show)
   return $ unsafePerformIO $ newIORef h
 
 
 main = do 
     putStrLn "hello"
+    startApp "/aadfasdf" False ["a"] (Just [("s", "c")])
 
 parseEnv :: FilePath -> IO (Maybe [(String, String)])
 parseEnv envFile = do
@@ -63,14 +68,13 @@ taskctl cline = do
     env <- parseEnv ".env"
     startApp command False args env
 
-{-
-main :: FilePath -> IO ()
-main filepath = bracket (listenOn $ PortNumber 1234) sClose $ \s ->
+
+mainServ :: IO ()
+mainServ = bracket (listenOn $ PortNumber 1234) sClose $ \s ->
   forever $ do
     (handle, hostname, portnum) <- accept s
-    forkIO $ do
-      readProcesses filepath
--}
+    respondStatuses handle
+
 
 startApp :: FilePath             -- ^ Command
             -> Bool             -- ^ Search PATH?
@@ -82,6 +86,8 @@ startApp command spath args env  = forkIO $ go
                 ht1 <- ht
                 ht2 <- readIORef ht1
                 H.insert ht2 1 2
+                (Just x) <- H.lookup ht2 1
+                putStrLn (show x)
                 err1 <- spawn (executeFile command spath args env)
                 err <- err1
                 --case err of
@@ -106,3 +112,11 @@ checkStatus pid command spath args env = do
         _         -> do
             threadDelay 5
             checkStatus pid command spath args env
+
+
+respondStatuses :: Handle -> IO ()
+respondStatuses h = do
+    ht1 <- ht
+    ht2 <- readIORef ht1
+    statusList <- H.toList ht2 
+    hPutStrLn h (show (statusList :: [(ProcessID,String)]))                
