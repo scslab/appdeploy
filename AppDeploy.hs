@@ -1,11 +1,17 @@
-{-# LANGUAGE OverloadedStrings, DeriveDataTypeable #-}
+{-# LANGUAGE OverloadedStrings, TemplateHaskell, DeriveDataTypeable #-}
 
 import System.Posix.Process
 import System.Posix.Unistd
 import System.Posix.Types
 import Control.Concurrent
 import Data.List.Split
+import Data.IORef
+import Data.Global
 import Control.Concurrent.Spawn
+import System.IO.Unsafe
+--import qualified Data.HashTable.IO as H
+import qualified Data.HashTable as H
+
 
 -- Step 1
 -- taskctl /path/to/app [arg1 [arg2 [arg3]]]
@@ -24,6 +30,17 @@ import Control.Concurrent.Spawn
 -- Step 3
 -- List status of running processes
 
+
+--type HashTable k v = H.BasicHashTable k v
+
+--ht :: IORef (H.HashTable Int Int)
+{-# NOINLINE ht #-}
+ht = do
+  h <- H.new (==) H.hashInt
+  unsafePerformIO $ newIORef h
+  --newhash <- H.new
+
+
 main = do 
     putStrLn "hello"
 
@@ -35,9 +52,9 @@ parseEnv envFile = do
 
 --readProcesses :: FilePath -> IO a 
 readProcesses descriptionFile = do
-        processesString <- readFile descriptionFile 
-        let processList = lines processesString
-        mapM taskctl processList
+    processesString <- readFile descriptionFile 
+    let processList = lines processesString
+    mapM taskctl processList
 
 taskctl :: String -> IO ThreadId
 taskctl cline = do
@@ -47,6 +64,15 @@ taskctl cline = do
     env <- parseEnv ".env"
     startApp command False args env
 
+{-
+main :: FilePath -> IO ()
+main filepath = bracket (listenOn $ PortNumber 1234) sClose $ \s ->
+  forever $ do
+    (handle, hostname, portnum) <- accept s
+    forkIO $ do
+      readProcesses filepath
+-}
+
 startApp :: FilePath             -- ^ Command
             -> Bool             -- ^ Search PATH?
             -> [String]             -- ^ Arguments
@@ -54,6 +80,7 @@ startApp :: FilePath             -- ^ Command
             -> IO ThreadId
 startApp command spath args env  = forkIO $ go
         where go = do
+                H.insert ht 1 2
                 err1 <- spawn (executeFile command spath args env)
                 err <- err1
                 case err of
