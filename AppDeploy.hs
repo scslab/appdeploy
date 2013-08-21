@@ -37,8 +37,7 @@ import qualified Data.HashTable as H
 {-# NOINLINE ht #-}
 ht = do
   h <- H.new (==) H.hashInt
-  unsafePerformIO $ newIORef h
-  --newhash <- H.new
+  return $ unsafePerformIO $ newIORef h
 
 
 main = do 
@@ -80,14 +79,16 @@ startApp :: FilePath             -- ^ Command
             -> IO ThreadId
 startApp command spath args env  = forkIO $ go
         where go = do
-                H.insert ht 1 2
+                ht1 <- ht
+                ht2 <- readIORef ht1
+                H.insert ht2 1 2
                 err1 <- spawn (executeFile command spath args env)
                 err <- err1
-                case err of
-                    0 -> return
-                    _ -> do
-                        print err
-                        go
+                --case err of
+                --    0 -> return
+                --    _ -> do
+                --        print err
+                go
         --pid <- forkProcess (executeFile command spath args env) 
         --checkStatus pid command spath args env
 
