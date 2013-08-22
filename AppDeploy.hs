@@ -15,7 +15,8 @@ import Network
 import System.IO
 import Control.Exception
 import Control.Monad
-
+import Control.Monad.Trans
+import Control.Exception.Base
 
 -- Step 1
 -- taskctl /path/to/app [arg1 [arg2 [arg3]]]
@@ -46,7 +47,7 @@ ht = do
 
 main = do 
     putStrLn "hello"
-    startApp "/aadfasdf" False ["a"] (Just [("s", "c")])
+    --startApp "/aadfasdf" False ["a"] (Just [("s", "c")])
 
 parseEnv :: FilePath -> IO (Maybe [(String, String)])
 parseEnv envFile = do
@@ -55,70 +56,80 @@ parseEnv envFile = do
     return $ Just $ map (\line -> ((head $ splitOn "=" line) ,(last $ splitOn "=" line))) varList  
 
 --readProcesses :: FilePath -> IO a 
-readProcesses descriptionFile = do
-    processesString <- readFile descriptionFile 
-    let processList = lines processesString
-    mapM taskctl processList
+--readProcesses descriptionFile = do
+    
+--    processesString <- readFile descriptionFile 
+--    let processList = lines processesString
+--    mapM (taskctl htMutex) processList
 
-taskctl :: String -> IO ThreadId
-taskctl cline = do
+taskctl :: Mutex -> String -> IO ThreadId
+taskctl htMutex cline = do
     let entries = splitOn " " cline
     let command = head entries
     let args = tail entries
     env <- parseEnv ".env"
-    startApp command False args env
+    startApp htMutex command False args env
 
 
-mainServ :: IO ()
-mainServ = bracket (listenOn $ PortNumber 1234) sClose $ \s ->
+mainServ :: FilePath -> IO ()
+mainServ descriptionFile = bracket (listenOn $ PortNumber 1234) sClose $ \s -> do
+  htMutex <- newMutex
+  releaseMutex htMutex
+  processesString <- readFile descriptionFile 
+  let processList = lines processesString
+  mapM (taskctl htMutex) processList
   forever $ do
     (handle, hostname, portnum) <- accept s
-    respondStatuses handle
+    respondStatuses handle htMutex
 
 
-startApp :: FilePath             -- ^ Command
+startApp :: Mutex -> FilePath             -- ^ Command
             -> Bool             -- ^ Search PATH?
             -> [String]             -- ^ Arguments
             -> Maybe [(String, String)]     -- ^ Environment
             -> IO ThreadId
-startApp command spath args env  = forkIO $ go
+startApp htMutex command spath args env  = forkIO $ go 
         where go = do
                 ht1 <- ht
                 ht2 <- readIORef ht1
+                claimMutex htMutex
                 success <- H.update ht2 (show command) "running"
                 if not success
                 then  H.insert ht2 (show command) "running"
                 else return ()
+                releaseMutex htMutex
                 err1 <- spawn (executeFile command spath args env)
+                claimMutex htMutex
                 H.update ht2 (show command) "down"
+                releaseMutex htMutex
                 err <- err1
-                --case err of
-                --    0 -> return
-                --    _ -> do
-                --        print err
+                case err of
+                    Left (SomeException e) -> putStrLn (show e)
+                    _ -> return ()
                 go
         --pid <- forkProcess (executeFile command spath args env) 
         --checkStatus pid command spath args env
 
 
-checkStatus :: ProcessID
-            -> FilePath             -- ^ Command
-            -> Bool             -- ^ Search PATH?
-            -> [String]             -- ^ Arguments
-            -> Maybe [(String, String)]     -- ^ Environment
-            -> IO ThreadId
-checkStatus pid command spath args env = do
-    pstatus <- getProcessStatus False True pid
-    case pstatus of
-        Just stat -> startApp command spath args env
-        _         -> do
-            threadDelay 5
-            checkStatus pid command spath args env
 
-
-respondStatuses :: Handle -> IO ()
-respondStatuses h = do
+respondStatuses :: Handle -> Mutex -> IO ()
+respondStatuses h htMutex= do
     ht1 <- ht
     ht2 <- readIORef ht1
+    claimMutex htMutex
     statusList <- H.toList ht2 
+    releaseMutex htMutex
     hPutStrLn h (show (statusList :: [(String, String)]))                
+
+
+
+type Mutex = MVar ()
+
+claimMutex :: MonadIO m => Mutex -> m ()
+claimMutex = liftIO . takeMVar
+
+newMutex :: MonadIO m => m Mutex
+newMutex = liftIO $ newMVar ()
+
+releaseMutex :: MonadIO m => Mutex -> m ()
+releaseMutex m = liftIO $ putMVar m ()
