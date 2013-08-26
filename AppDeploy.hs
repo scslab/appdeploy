@@ -18,9 +18,11 @@ import Control.Monad
 import Control.Monad.Trans
 import Control.Exception.Base
 
+import Debug.Trace
+
 -- Step 1
 -- taskctl /path/to/app [arg1 [arg2 [arg3]]]
--- look at .env file to get environment variables
+-- look at .env file to get environment variables (?)
 
 -- Step 2
 -- taskctl description_file
@@ -38,15 +40,25 @@ import Control.Exception.Base
 
 --type HashTable k v = H.BasicHashTable k v
 
---ht :: IORef (H.HashTable Int Int)
+ht :: (H.HashTable String String)
 {-# NOINLINE ht #-}
-ht = do
-  h <- H.new (==) H.hashString
-  return $ unsafePerformIO $ newIORef h
+ht = unsafePerformIO $ H.new (==) H.hashString
+
+--main :: FilePath -> IO ()
+main = bracket (listenOn $ PortNumber 1234) sClose $ \s -> do
+  htMutex <- newMutex
+  --trace "releaseMutex" $ releaseMutex htMutex
+  processesString <- trace "processing file" $ readFile "./processes" 
+  let processList = lines processesString
+  mapM (taskctl htMutex) processList
+  forever $ do
+    (handle, hostname, portnum) <- accept s
+    respondStatuses handle htMutex
 
 
-main = do 
-    putStrLn "hello"
+--main = do 
+--    putStrLn "hello"
+
     --startApp "/aadfasdf" False ["a"] (Just [("s", "c")])
 
 parseEnv :: FilePath -> IO (Maybe [(String, String)])
@@ -67,20 +79,10 @@ taskctl htMutex cline = do
     let entries = splitOn " " cline
     let command = head entries
     let args = tail entries
-    env <- parseEnv ".env"
+    env <- parseEnv "./.env"
     startApp htMutex command False args env
 
 
-mainServ :: FilePath -> IO ()
-mainServ descriptionFile = bracket (listenOn $ PortNumber 1234) sClose $ \s -> do
-  htMutex <- newMutex
-  releaseMutex htMutex
-  processesString <- readFile descriptionFile 
-  let processList = lines processesString
-  mapM (taskctl htMutex) processList
-  forever $ do
-    (handle, hostname, portnum) <- accept s
-    respondStatuses handle htMutex
 
 
 startApp :: Mutex -> FilePath             -- ^ Command
@@ -90,18 +92,19 @@ startApp :: Mutex -> FilePath             -- ^ Command
             -> IO ThreadId
 startApp htMutex command spath args env  = forkIO $ go 
         where go = do
-                ht1 <- ht
-                ht2 <- readIORef ht1
-                claimMutex htMutex
-                success <- H.update ht2 (show command) "running"
+                --ht1 <- ht
+                --ht2 <- readIORef ht1
+
+                trace ("claimMutex" ++ (show command)) $ claimMutex htMutex
+                success <- H.update ht (show command) "running"
                 if not success
-                then  H.insert ht2 (show command) "running"
+                then  H.insert ht (show command) "running"
                 else return ()
-                releaseMutex htMutex
+                trace "releaseMutex" $ releaseMutex htMutex
                 err1 <- spawn (executeFile command spath args env)
-                claimMutex htMutex
-                H.update ht2 (show command) "down"
-                releaseMutex htMutex
+                trace "claimMutex" $ claimMutex htMutex
+                H.update ht (show command) "down"
+                trace "releaseMutex" $ releaseMutex htMutex
                 err <- err1
                 case err of
                     Left (SomeException e) -> putStrLn (show e)
@@ -114,10 +117,10 @@ startApp htMutex command spath args env  = forkIO $ go
 
 respondStatuses :: Handle -> Mutex -> IO ()
 respondStatuses h htMutex= do
-    ht1 <- ht
-    ht2 <- readIORef ht1
+    --ht1 <- ht
+    --ht2 <- readIORef ht1
     claimMutex htMutex
-    statusList <- H.toList ht2 
+    statusList <- H.toList ht 
     releaseMutex htMutex
     hPutStrLn h (show (statusList :: [(String, String)]))                
 
