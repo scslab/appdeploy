@@ -9,7 +9,6 @@ import Data.IORef
 import Data.Global
 import Control.Concurrent.Spawn
 import System.IO.Unsafe
---import qualified Data.HashTable.IO as H
 import qualified Data.HashTable as H
 import Network
 import System.IO
@@ -53,7 +52,7 @@ main = bracket (listenOn $ PortNumber 1234) sClose $ \s -> do
   mapM (taskctl htMutex) processList
   forever $ do
     (handle, hostname, portnum) <- accept s
-    respondStatuses handle htMutex
+    forkIO $ respondStatuses handle htMutex
 
 
 --main = do 
@@ -95,16 +94,16 @@ startApp htMutex command spath args env  = forkIO $ go
                 --ht1 <- ht
                 --ht2 <- readIORef ht1
 
-                trace ("claimMutex" ++ (show command)) $ claimMutex htMutex
+                claimMutex htMutex
                 success <- H.update ht (show command) "running"
                 if not success
                 then  H.insert ht (show command) "running"
                 else return ()
-                trace "releaseMutex" $ releaseMutex htMutex
+                releaseMutex htMutex
                 err1 <- spawn (executeFile command spath args env)
-                trace "claimMutex" $ claimMutex htMutex
+                claimMutex htMutex
                 H.update ht (show command) "down"
-                trace "releaseMutex" $ releaseMutex htMutex
+                releaseMutex htMutex
                 err <- err1
                 case err of
                     Left (SomeException e) -> putStrLn (show e)
@@ -119,10 +118,28 @@ respondStatuses :: Handle -> Mutex -> IO ()
 respondStatuses h htMutex= do
     --ht1 <- ht
     --ht2 <- readIORef ht1
-    claimMutex htMutex
-    statusList <- H.toList ht 
-    releaseMutex htMutex
-    hPutStrLn h (show (statusList :: [(String, String)]))                
+    hPutStrLn h "Enter Command: "
+    input <- hGetLine h 
+    --determine command and respond appropriately
+    let cmd = head $ words input
+    let args = tail $ words input
+    env <- parseEnv "./.env"
+    case cmd of
+        "statuses" -> do
+            claimMutex htMutex
+            statusList <- H.toList ht 
+            releaseMutex htMutex
+            hPutStrLn h (show (statusList :: [(String, String)]))
+        "launch" -> do
+            startApp htMutex (head args) False (tail args) env
+            return ()
+        "setEnvFile" -> do
+            newEnv <- parseEnv (head args)
+            startApp htMutex (head args) False (tail args) newEnv
+            return ()
+        _ -> do
+            hPutStrLn h "invalid command"
+    respondStatuses h htMutex                
 
 
 
