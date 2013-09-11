@@ -1,5 +1,3 @@
-{-# LANGUAGE OverloadedStrings, TemplateHaskell, DeriveDataTypeable #-}
-
 import Control.Exception
 import Control.Monad
 import System.Process

@@ -1,3 +1,4 @@
 AppDeploy
 *.hi
 *.o
+dist/
