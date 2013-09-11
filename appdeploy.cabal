@@ -17,6 +17,7 @@ cabal-version:       >=1.10
 
 executable appdeploy
   main-is:             AppDeploy.hs
+  GHC-options:         -threaded
   -- other-modules:       
   build-depends:
       base < 6.0
