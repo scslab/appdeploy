@@ -2,6 +2,7 @@ import Control.Exception
 import Control.Monad
 import System.Process
 import Control.Concurrent
+import Data.Char
 import Data.List.Split
 import qualified Data.HashTable.IO as H
 import Network
@@ -32,19 +33,19 @@ parseEnv envString =
 handleConnection :: Handle -> MVar Int -> IO ()
 handleConnection h htMutex = forever $ do
     hPutStrLn h "Enter Command: "
-    input <- hGetLine h 
-    let (cmd:args) = words input
+    cmd <- trim `fmap` hGetLine h
     case cmd of
         "statuses" -> do
             statusList <- atomic htMutex $ H.toList ht 
             hPutStrLn h (show $ map fst statusList)
         "launch" -> do
+            shellcmd <- trim `fmap` hGetLine h 
             let env = [] --something from the request
             oldId <- modifyMVar htMutex (\a -> return (a + 1, a))
-            startApp htMutex (head args) False (tail args) env oldId
+            startApp htMutex shellcmd oldId
             hPutStrLn h $ show oldId
         "kill" -> atomic htMutex $ do
-            let key = read $ head args
+            key <- (read . trim) `fmap` hGetLine h 
             mPHandle <- H.lookup ht key 
             case mPHandle of
               Nothing -> hPutStrLn h "No process found"
@@ -52,16 +53,14 @@ handleConnection h htMutex = forever $ do
                 terminateProcess pHandle
                 H.delete ht key
         _ -> do
-            hPutStrLn h "invalid command"
+            hPutStrLn h $ "invalid command: (" ++ cmd ++ ")"
 
-startApp :: MVar Int -> FilePath             -- ^ Command
-            -> Bool             -- ^ Search PATH?
-            -> [String]             -- ^ Arguments
-            -> [(String, String)]     -- ^ Environment
-            -> Int   -- identifier
+startApp :: MVar Int 
+            -> String    -- Command
+            -> Int       -- Identifier
             -> IO ()
-startApp htMutex command spath args env identifier = void $ forkIO $ do 
-    let createProc = proc command args
+startApp htMutex command identifier = void $ forkIO $ do 
+    let createProc = shell command
     pHandle <- atomic htMutex $ do
       (_, _, _, pHandle) <- createProcess createProc
       H.insert ht identifier pHandle
@@ -72,8 +71,16 @@ startApp htMutex command spath args env identifier = void $ forkIO $ do
       Nothing -> return ()
       Just pHandle -> do
         atomic htMutex $ H.delete ht identifier
-        startApp htMutex command spath args env identifier
+        startApp htMutex command identifier
 
 atomic :: MVar b -> IO a -> IO a
 atomic mtx act = withMVar mtx $ \_ -> act
+
+--
+-- isSpace :: Char -> Bool
+-- if the character is one of ' ', '\t', '\n', '\r'...
+--
+
+trim :: String -> String
+trim str = dropWhile isSpace $ reverse $ dropWhile isSpace $ reverse str
 
