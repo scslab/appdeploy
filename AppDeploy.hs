@@ -22,14 +22,6 @@ main = bracket (listenOn $ PortNumber 9876) sClose $ \s -> do
     forkIO $ handleConnection handle htMutex
 
 
-parseEnv :: String -> [(String, String)]
-parseEnv envString =
-    let varList = lines envString
-    in map parseLine varList  
-    where parseLine line =
-            let (key:value:[]) = splitOn "=" line
-            in (key, value)
-
 handleConnection :: Handle -> MVar Int -> IO ()
 handleConnection h htMutex = forever $ do
     hPutStrLn h "Enter Command: "
@@ -40,7 +32,7 @@ handleConnection h htMutex = forever $ do
             hPutStrLn h (show $ map fst statusList)
         "launch" -> do
             shellcmd <- trim `fmap` hGetLine h 
-            let env = [] --something from the request
+            let env = readenvs h
             oldId <- modifyMVar htMutex (\a -> return (a + 1, a))
             startApp htMutex shellcmd oldId
             hPutStrLn h $ show oldId
@@ -73,6 +65,20 @@ startApp htMutex command identifier = void $ forkIO $ do
         atomic htMutex $ H.delete ht identifier
         startApp htMutex command identifier
 
+readenvs :: Handle -> [(String,String)]
+readenvs h = go h []
+  where go h list = do
+          line <- trim `fmap` hGetLine h
+          if line == "" then
+            reverse list
+            else (parseEnv line):list
+
+parseEnv :: String -> (String, String)
+parseEnv envString =
+  let (key:value:[]) = splitOn "=" line
+  in (key, value)
+
+
 atomic :: MVar b -> IO a -> IO a
 atomic mtx act = withMVar mtx $ \_ -> act
 
@@ -81,6 +87,23 @@ atomic mtx act = withMVar mtx $ \_ -> act
 -- if the character is one of ' ', '\t', '\n', '\r'...
 --
 
-trim :: String -> String
-trim str = dropWhile isSpace $ reverse $ dropWhile isSpace $ reverse str
+trim = triml . trimr
+
+triml [] = []
+triml arr@(x:xs) =
+  if (isSpace x)
+    then triml xs
+    else arr
+
+
+trimrhelper "" accm _ = reverse accm
+trimrhelper str accm total =
+  let next = ((head str):total)
+  in if isSpace $ head str then
+       trimrhelper (tail str) accm next
+       else trimrhelper (tail str) next next
+
+
+trimr []     = []
+trimr x = trimrhelper x "" ""
 
