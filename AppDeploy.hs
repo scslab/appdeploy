@@ -32,9 +32,9 @@ handleConnection h htMutex = forever $ do
             hPutStrLn h (show $ map fst statusList)
         "launch" -> do
             shellcmd <- trim `fmap` hGetLine h 
-            let env = readenvs h
+            env <- readenvs h
             oldId <- modifyMVar htMutex (\a -> return (a + 1, a))
-            startApp htMutex shellcmd oldId
+            startApp htMutex shellcmd env oldId
             hPutStrLn h $ show oldId
         "kill" -> atomic htMutex $ do
             key <- (read . trim) `fmap` hGetLine h 
@@ -48,11 +48,12 @@ handleConnection h htMutex = forever $ do
             hPutStrLn h $ "invalid command: (" ++ cmd ++ ")"
 
 startApp :: MVar Int 
-            -> String    -- Command
-            -> Int       -- Identifier
+            -> String             -- Command
+            -> [(String, String)] -- Environment
+            -> Int                -- Identifier
             -> IO ()
-startApp htMutex command identifier = void $ forkIO $ do 
-    let createProc = shell command
+startApp htMutex command env identifier = void $ forkIO $ do 
+    let createProc = (shell command) { env = Just env }
     pHandle <- atomic htMutex $ do
       (_, _, _, pHandle) <- createProcess createProc
       H.insert ht identifier pHandle
@@ -63,19 +64,20 @@ startApp htMutex command identifier = void $ forkIO $ do
       Nothing -> return ()
       Just pHandle -> do
         atomic htMutex $ H.delete ht identifier
-        startApp htMutex command identifier
+        startApp htMutex command env identifier
 
-readenvs :: Handle -> [(String,String)]
+readenvs :: Handle -> IO [(String,String)]
 readenvs h = go h []
   where go h list = do
           line <- trim `fmap` hGetLine h
+          putStrLn line
           if line == "" then
-            reverse list
-            else (parseEnv line):list
+            return $ reverse list
+            else go h $ (parseEnv line):list
 
 parseEnv :: String -> (String, String)
 parseEnv envString =
-  let (key:value:[]) = splitOn "=" line
+  let (key:value:[]) = splitOn "=" envString
   in (key, value)
 
 
