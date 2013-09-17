@@ -1,33 +1,50 @@
 import Control.Exception
 import Control.Monad
+import System.FilePath
+import System.Directory
 import System.Process
 import Control.Concurrent
 import Data.Char
 import Data.List.Split
 import qualified Data.HashTable.IO as H
 import qualified Data.ByteString.Lazy as L
+import Data.Time.Clock
 import qualified Codec.Archive.Tar as Tar
 import Network
 import System.IO.Temp
 import System.IO
 import System.IO.Unsafe
-import Debug.Trace
 
 ht :: (H.BasicHashTable Int ProcessHandle)
 {-# NOINLINE ht #-}
 ht = unsafePerformIO $ H.new
 
+tmpDir :: FilePath
+tmpDir = "tmp"
+
 main :: IO ()
 main = bracket (listenOn $ PortNumber 9876) sClose $ \s -> do
+  exists <- doesDirectoryExist tmpDir
+  when exists $ removeDirectoryRecursive tmpDir
+  createDirectory tmpDir
+
   htMutex <- newMVar 0
   forever $ do
     (handle, hostname, portnum) <- accept s
     forkIO $ handleConnection handle htMutex
+               `finally` hClose handle
 
+foreverOrEOF :: Handle -> IO () -> IO ()
+foreverOrEOF h act = do
+    isEOF <- hIsEOF h
+    if isEOF then
+      return ()
+      else do
+        act
+        foreverOrEOF h act
 
 handleConnection :: Handle -> MVar Int -> IO ()
-handleConnection h htMutex = forever $ do
-    --hPutStrLn h "Enter Command: "
+handleConnection h htMutex = foreverOrEOF h $ do
     cmd <- trim `fmap` hGetLine h
     case cmd of
         "statuses" -> do  -- prints list of processes
@@ -47,11 +64,10 @@ handleConnection h htMutex = forever $ do
             nbytes <- read `fmap` hGetLine h
             tarfile <- L.hGet h nbytes
             let entries = Tar.read tarfile
-            tmppath <- createTempDirectory "tmp" "appdeploy"
+            tmppath <- createTempDirectory tmpDir "appdeploy"
             Tar.unpack tmppath entries
             oldId <- modifyMVar htMutex (\a -> return (a + 1, a))
-            startApp htMutex shellcmd env tmppath oldId
-            hPutStrLn h $ show oldId
+            void $ forkIO $ startApp htMutex shellcmd env tmppath oldId 0
         "kill" -> atomic htMutex $ do  -- OK or NOT FOUND
             key <- (read . trim) `fmap` hGetLine h 
             mPHandle <- H.lookup ht key 
@@ -69,20 +85,36 @@ startApp :: MVar Int
             -> [(String, String)] -- Environment
             -> FilePath           -- cwd
             -> Int                -- Identifier
+            -> Int                -- Retries
             -> IO ()
-startApp htMutex command env cwd identifier = void $ forkIO $ do 
-    let createProc = (shell command) { env = Just env, cwd = Just cwd }
+startApp htMutex command env cwd identifier retries = when (retries < 5) $ do 
+    stdout <- openFile (cwd </> "log.out") AppendMode
+    stderr <- openFile (cwd </> "log.err") AppendMode
+    stdin <- openFile "/dev/null" ReadMode
+    let createProc = (shell command) { env = Just env
+                                     , cwd = Just cwd
+                                     , std_in = UseHandle stdin
+                                     , std_out = UseHandle stdout
+                                     , std_err = UseHandle stderr }
     pHandle <- atomic htMutex $ do
       (_, _, _, pHandle) <- createProcess createProc
+      hClose stdout
+      hClose stderr
+      hClose stdin
       H.insert ht identifier pHandle
       return pHandle
+    startTime <- getCurrentTime
     waitForProcess pHandle
+    endTime <- getCurrentTime
     mPHandle <- withMVar htMutex $ \_ -> H.lookup ht identifier
     case mPHandle of
-      Nothing -> return ()
+      Nothing -> removeDirectoryRecursive cwd
       Just pHandle -> do
         atomic htMutex $ H.delete ht identifier
-        startApp htMutex command env cwd identifier
+        let nextRetries = if (diffUTCTime endTime startTime < 30) then
+                            retries + 1
+                            else 0
+        startApp htMutex command env cwd identifier nextRetries
 
 readenvs :: Handle -> IO [(String,String)]
 readenvs h = go h []
