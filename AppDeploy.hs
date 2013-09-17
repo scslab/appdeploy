@@ -5,7 +5,10 @@ import Control.Concurrent
 import Data.Char
 import Data.List.Split
 import qualified Data.HashTable.IO as H
+import qualified Data.ByteString.Lazy as L
+import qualified Codec.Archive.Tar as Tar
 import Network
+import System.IO.Temp
 import System.IO
 import System.IO.Unsafe
 import Debug.Trace
@@ -24,36 +27,51 @@ main = bracket (listenOn $ PortNumber 9876) sClose $ \s -> do
 
 handleConnection :: Handle -> MVar Int -> IO ()
 handleConnection h htMutex = forever $ do
-    hPutStrLn h "Enter Command: "
+    --hPutStrLn h "Enter Command: "
     cmd <- trim `fmap` hGetLine h
     case cmd of
-        "statuses" -> do
+        "statuses" -> do  -- prints list of processes
             statusList <- atomic htMutex $ H.toList ht 
             hPutStrLn h (show $ map fst statusList)
-        "launch" -> do
+        "launch" -> do  -- prints pid
+            -- format:
+            -- shell cmd
+            -- var1=val1
+            -- var2=val2
+            -- ...
+            --
+            -- num bytes
+            -- tar data
             shellcmd <- trim `fmap` hGetLine h 
             env <- readenvs h
+            nbytes <- read `fmap` hGetLine h
+            tarfile <- L.hGet h nbytes
+            let entries = Tar.read tarfile
+            tmppath <- createTempDirectory "tmp" "appdeploy"
+            Tar.unpack tmppath entries
             oldId <- modifyMVar htMutex (\a -> return (a + 1, a))
-            startApp htMutex shellcmd env oldId
+            startApp htMutex shellcmd env tmppath oldId
             hPutStrLn h $ show oldId
-        "kill" -> atomic htMutex $ do
+        "kill" -> atomic htMutex $ do  -- OK or NOT FOUND
             key <- (read . trim) `fmap` hGetLine h 
             mPHandle <- H.lookup ht key 
             case mPHandle of
-              Nothing -> hPutStrLn h "No process found"
+              Nothing -> hPutStrLn h "NOT FOUND"
               Just pHandle -> do
                 terminateProcess pHandle
                 H.delete ht key
+                hPutStrLn h "OK"
         _ -> do
-            hPutStrLn h $ "invalid command: (" ++ cmd ++ ")"
+            hPutStrLn h $ "INVALID COMMAND (" ++ cmd ++ ")"
 
 startApp :: MVar Int 
             -> String             -- Command
             -> [(String, String)] -- Environment
+            -> FilePath           -- cwd
             -> Int                -- Identifier
             -> IO ()
-startApp htMutex command env identifier = void $ forkIO $ do 
-    let createProc = (shell command) { env = Just env }
+startApp htMutex command env cwd identifier = void $ forkIO $ do 
+    let createProc = (shell command) { env = Just env, cwd = Just cwd }
     pHandle <- atomic htMutex $ do
       (_, _, _, pHandle) <- createProcess createProc
       H.insert ht identifier pHandle
@@ -64,7 +82,7 @@ startApp htMutex command env identifier = void $ forkIO $ do
       Nothing -> return ()
       Just pHandle -> do
         atomic htMutex $ H.delete ht identifier
-        startApp htMutex command env identifier
+        startApp htMutex command env cwd identifier
 
 readenvs :: Handle -> IO [(String,String)]
 readenvs h = go h []
