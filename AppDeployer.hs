@@ -1,3 +1,5 @@
+module Main where
+
 import Control.Exception
 import Control.Monad
 import System.FilePath

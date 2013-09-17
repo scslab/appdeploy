@@ -15,8 +15,8 @@ build-type:          Simple
 extra-source-files:  README.md
 cabal-version:       >=1.10
 
-executable appdeploy
-  main-is:             AppDeploy.hs
+executable appdeployer
+  main-is:             AppDeployer.hs
   GHC-options:         -threaded
   -- other-modules:       
   build-depends:
@@ -31,5 +31,14 @@ executable appdeploy
     , tar
     , temporary
     , time
+  -- hs-source-dirs:      
+  default-language:    Haskell2010
+
+executable appcontroller
+  main-is:             AppController.hs
+  GHC-options:         -threaded
+  -- other-modules:       
+  build-depends:
+      base < 6.0
   -- hs-source-dirs:      
   default-language:    Haskell2010
