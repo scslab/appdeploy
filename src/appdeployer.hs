@@ -8,6 +8,7 @@ import System.Process
 import Control.Concurrent
 import Data.Char
 import Data.List.Split
+import Debug.Trace
 import qualified Data.HashTable.IO as H
 import qualified Data.ByteString.Lazy as L
 import Data.Time.Clock

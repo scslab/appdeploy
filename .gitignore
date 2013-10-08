@@ -2,3 +2,4 @@ AppDeploy
 *.hi
 *.o
 dist/
+minicontroller.hs
