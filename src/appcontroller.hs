@@ -25,43 +25,70 @@ import System.IO.Unsafe
 -- have some way of knowing the statuses once this program dies/restarts
 -- know the availability of the deployers
 
-ht :: (H.BasicHashTable Int Int)  -- hashtable of app deployers and their statuses (as ints for now)
-{-# NOINLINE ht #-}
-ht = unsafePerformIO $ H.new
+appht :: (H.BasicHashTable Int String)  -- hashtable of process id's and the hostnames of the deployers they run on
+{-# NOINLINE appht #-}
+appht = unsafePerformIO $ H.new
+
+deployerht :: (H.BasicHashTable String Int)  -- hashtable of deployer hostnames and their statuses (as ints for now)
+{-# NOINLINE deployerht #-}
+deployerht = unsafePerformIO $ H.new
 
 main :: IO ()
 main = bracket (listenOn $ PortNumber 1234) sClose $ \s -> forever $ do
-  (chandle, hostname, portnum) <- accept s  -- handle for communicating with the client
-  appname <- trim `fmap` hGetLine chandle
-  port <- trim `fmap` hGetLine chandle
-  tarfile <- trim `fmap` hGetLine chandle
-  filesize <- trim `fmap` hGetLine chandle
-  dhandle <- connectTo hostname $ PortNumber 9876  -- handle for the app deployer
-  hPutStrLn dhandle "launch"
-  hPutStrLn dhandle appname
-  hPutStrLn dhandle ("PORT=" ++ port)
-  hPutStrLn dhandle ""
-  hPutStrLn dhandle filesize  -- todo: get file size from the tar file
-  hPutStrLn dhandle tarfile
+  appMutex <- newMVar 0  -- for appht
+  depMutex <- newMVar ()  -- for deployerht
+  (handle, hostname, portnum) <- accept s
+  forkIO $ handleConnection handle appMutex depMutex
+             `finally` hClose handle
 
-handleConnection :: Handle -> MVar Int -> IO ()
-handleConnection h htMutex = foreverOrEOF h $ do
-    cmd <- trim `fmap` hGetLine h
+handleConnection :: Handle -> MVar Int -> MVar () -> IO ()
+handleConnection chandle appMutex depMutex = foreverOrEOF chandle $ do
+    let port = PortNumber 9876
+        portnum = 9876
+    cmd <- trim `fmap` hGetLine chandle
     case cmd of
-        "deployers" -> do
-            -- show statuses of all app deployers in the hashtable
-            deployerList <- atomic htMutex $ H.toList ht 
-            hPutStrLn h (show $ map fst deployerList)
-        "run" -> do
-            appname <- trim `fmap` hGetLine h 
-            -- assign the app to an app deployer
+        "statuses" -> do  -- show statuses of all app deployers in the hashtable
+            deployerList <- atomic depMutex $ H.toList deployerht
+            hPutStrLn chandle (show $ map fst deployerList)
             return ()
-        "kill" -> do
-            id <- trim `fmap` hGetLine h 
-            -- find the app deployer running the process and give it the id
-            return ()
+        "deployer" -> do  -- show statuses of all apps of a deployer
+            hostname <- trim `fmap` hGetLine chandle  -- which port the deployer runs on
+            dhandle <- connectTo hostname port  -- handle for the app deployer
+            hPutStrLn dhandle "statuses"
+        "run" -> do  -- run an app
+            appname <- trim `fmap` hGetLine chandle
+            -- todo: assign the app to an app deployer
+            appname <- trim `fmap` hGetLine chandle
+            hostname <- trim `fmap` hGetLine chandle  -- shouldn't be entered by the user
+            tarfile <- trim `fmap` hGetLine chandle  -- todo: get file size from the tar file
+            filesize <- trim `fmap` hGetLine chandle
+            dhandle <- connectTo hostname port  -- handle for the app deployer
+            appId <- modifyMVar appMutex (\a -> return (a + 1, a))  -- allows multiple instances of same app to run
+            atomic appMutex $ H.insert appht appId hostname
+            hPutStrLn dhandle "launch"
+            hPutStrLn dhandle appname
+            hPutStrLn dhandle $ show portnum
+            hPutStrLn dhandle ("PORT=" ++ show portnum)
+            hPutStrLn dhandle ""
+            hPutStrLn dhandle filesize
+            hPutStrLn dhandle tarfile
+        "add" -> do  -- add a new deployer
+            hostname <- trim `fmap` hGetLine chandle
+            let status = 1
+            atomic depMutex $ H.insert deployerht hostname status
+        "kill" -> do  -- kill an app
+            appId <- (read . trim) `fmap` hGetLine chandle
+            mhost <- atomic appMutex $ H.lookup appht appId
+            case mhost of
+              Nothing -> hPutStrLn chandle "NOT FOUND"
+              Just hostname -> do
+                dhandle <- connectTo hostname port  -- handle for the app deployer
+                hPutStrLn dhandle "kill"
+                hPutStrLn dhandle $ show appId
+                response <- hGetLine dhandle  -- OK or NOT FOUND
+                hPutStrLn chandle response
         _ -> do
-            hPutStrLn h $ "INVALID COMMAND (" ++ cmd ++ ")"
+            hPutStrLn chandle $ "INVALID COMMAND (" ++ cmd ++ ")"
 
 -- Utils
 
@@ -95,4 +122,3 @@ trimrhelper str accm total =
 
 trimr []     = []
 trimr x = trimrhelper x "" ""
-

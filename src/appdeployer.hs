@@ -56,6 +56,7 @@ handleConnection h htMutex = foreverOrEOF h $ do
         "launch" -> do  -- prints pid
             -- format:
             -- shell cmd
+            -- identifier (as an int)
             -- var1=val1
             -- var2=val2
             -- ...
@@ -63,14 +64,16 @@ handleConnection h htMutex = foreverOrEOF h $ do
             -- num bytes
             -- tar data
             shellcmd <- trim `fmap` hGetLine h 
+            id <- (read . trim) `fmap` hGetLine h 
             env <- readenvs h
             nbytes <- read `fmap` hGetLine h
             tarfile <- L.hGet h nbytes
             let entries = Tar.read tarfile
             tmppath <- createTempDirectory tmpDir "appdeploy"
             Tar.unpack tmppath entries
-            oldId <- modifyMVar htMutex (\a -> return (a + 1, a))
-            void $ forkIO $ startApp htMutex shellcmd env tmppath oldId 0
+            --oldId <- modifyMVar htMutex (\a -> return (a + 1, a))
+            --void $ forkIO $ startApp htMutex shellcmd env tmppath oldId 0
+            void $ forkIO $ startApp htMutex shellcmd env tmppath id 0
         "kill" -> atomic htMutex $ do  -- OK or NOT FOUND
             key <- (read . trim) `fmap` hGetLine h 
             mPHandle <- H.lookup ht key 
