@@ -55,13 +55,19 @@ handleConnection chandle appMutex depMutex = foreverOrEOF chandle $ do
             hostname <- trim `fmap` hGetLine chandle  -- which port the deployer runs on
             dhandle <- connectTo hostname port  -- handle for the app deployer
             hPutStrLn dhandle "statuses"
+            statuses <- hGetLine dhandle
+            hPutStrLn chandle statuses
         "run" -> do  -- run an app
-            appname <- trim `fmap` hGetLine chandle
-            -- todo: assign the app to an app deployer
+            -- format:
+            -- app name
+            -- hostname of the deployer it should run on
+            -- size of tar file
+            -- tar file path
             appname <- trim `fmap` hGetLine chandle
             hostname <- trim `fmap` hGetLine chandle  -- shouldn't be entered by the user
-            tarfile <- trim `fmap` hGetLine chandle  -- todo: get file size from the tar file
-            filesize <- trim `fmap` hGetLine chandle
+            filesize <- trim `fmap` hGetLine chandle  -- todo: get filesize based on tarfile
+            filename <- trim `fmap` hGetLine chandle
+            tarBS <- L.readFile filename  -- convert to bytestring
             dhandle <- connectTo hostname port  -- handle for the app deployer
             appId <- modifyMVar appMutex (\a -> return (a + 1, a))  -- allows multiple instances of same app to run
             atomic appMutex $ H.insert appht appId hostname
@@ -71,7 +77,7 @@ handleConnection chandle appMutex depMutex = foreverOrEOF chandle $ do
             hPutStrLn dhandle ("PORT=" ++ show portnum)
             hPutStrLn dhandle ""
             hPutStrLn dhandle filesize
-            hPutStrLn dhandle tarfile
+            L.hPut dhandle tarBS
         "add" -> do  -- add a new deployer
             hostname <- trim `fmap` hGetLine chandle
             let status = 1
