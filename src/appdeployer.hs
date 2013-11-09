@@ -8,7 +8,7 @@ import System.Process
 import Control.Concurrent
 import Data.Char
 import Data.List.Split
-import Debug.Trace
+--import Debug.Trace
 import qualified Data.HashTable.IO as H
 import qualified Data.ByteString.Lazy as L
 import Data.Time.Clock
@@ -33,14 +33,14 @@ main = bracket (listenOn $ PortNumber 9876) sClose $ \s -> do
 
   htMutex <- newMVar 0
   forever $ do
-    (handle, hostname, portnum) <- accept s
-    forkIO $ handleConnection handle htMutex
-               `finally` hClose handle
+    (h, _, _) <- accept s
+    forkIO $ handleConnection h htMutex
+               `finally` hClose h
 
 foreverOrEOF :: Handle -> IO () -> IO ()
 foreverOrEOF h act = do
-    isEOF <- hIsEOF h
-    if isEOF then
+    eof <- hIsEOF h
+    if eof then
       return ()
       else do
         act
@@ -64,8 +64,8 @@ handleConnection h htMutex = foreverOrEOF h $ do
             -- num bytes
             -- tar data
             shellcmd <- trim `fmap` hGetLine h 
-            id <- (read . trim) `fmap` hGetLine h 
-            env <- readenvs h
+            identifier <- (read . trim) `fmap` hGetLine h 
+            envs <- readenvs h
             nbytes <- read `fmap` hGetLine h
             tarfile <- L.hGet h nbytes
             let entries = Tar.read tarfile
@@ -73,7 +73,7 @@ handleConnection h htMutex = foreverOrEOF h $ do
             Tar.unpack tmppath entries
             --oldId <- modifyMVar htMutex (\a -> return (a + 1, a))
             --void $ forkIO $ startApp htMutex shellcmd env tmppath oldId 0
-            void $ forkIO $ startApp htMutex shellcmd env tmppath id 0
+            void $ forkIO $ startApp htMutex shellcmd envs tmppath identifier 0
         "kill" -> atomic htMutex $ do  -- OK or NOT FOUND
             key <- (read . trim) `fmap` hGetLine h 
             mPHandle <- H.lookup ht key 
@@ -93,15 +93,15 @@ startApp :: MVar Int
             -> Int                -- Identifier
             -> Int                -- Retries
             -> IO ()
-startApp htMutex command env cwd identifier retries = when (retries < 5) $ do 
-    stdout <- openFile (cwd </> "log.out") AppendMode
-    stderr <- openFile (cwd </> "log.err") AppendMode
-    stdin <- openFile "/dev/null" ReadMode
-    let createProc = (shell command) { env = Just env
-                                     , cwd = Just cwd
-                                     , std_in = UseHandle stdin
-                                     , std_out = UseHandle stdout
-                                     , std_err = UseHandle stderr }
+startApp htMutex command envs cwdpath identifier retries = when (retries < 5) $ do 
+    output <- openFile (cwdpath </> "log.out") AppendMode
+    err <- openFile (cwdpath </> "log.err") AppendMode
+    input <- openFile "/dev/null" ReadMode
+    let createProc = (shell command) { env = Just envs
+                                     , cwd = Just cwdpath
+                                     , std_in = UseHandle input
+                                     , std_out = UseHandle output
+                                     , std_err = UseHandle err }
     pHandle <- atomic htMutex $ do
       (_, _, _, pHandle) <- createProcess createProc
       hClose stdout
@@ -110,26 +110,26 @@ startApp htMutex command env cwd identifier retries = when (retries < 5) $ do
       H.insert ht identifier pHandle
       return pHandle
     startTime <- getCurrentTime
-    waitForProcess pHandle
+    _ <- waitForProcess pHandle
     endTime <- getCurrentTime
     mPHandle <- withMVar htMutex $ \_ -> H.lookup ht identifier
     case mPHandle of
-      Nothing -> removeDirectoryRecursive cwd
-      Just pHandle -> do
+      Nothing -> removeDirectoryRecursive cwdpath
+      Just _ -> do
         atomic htMutex $ H.delete ht identifier
         let nextRetries = if (diffUTCTime endTime startTime < 30) then
                             retries + 1
                             else 0
-        startApp htMutex command env cwd identifier nextRetries
+        startApp htMutex command envs cwdpath identifier nextRetries
 
 readenvs :: Handle -> IO [(String,String)]
 readenvs h = go h []
-  where go h list = do
-          line <- trim `fmap` hGetLine h
+  where go hand list = do
+          line <- trim `fmap` hGetLine hand
           putStrLn line
           if line == "" then
             return $ reverse list
-            else go h $ (parseEnv line):list
+            else go hand $ (parseEnv line):list
 
 parseEnv :: String -> (String, String)
 parseEnv envString =
@@ -145,15 +145,17 @@ atomic mtx act = withMVar mtx $ \_ -> act
 -- if the character is one of ' ', '\t', '\n', '\r'...
 --
 
+trim :: [Char] -> [Char]
 trim = triml . trimr
 
+triml :: [Char] -> [Char]
 triml [] = []
 triml arr@(x:xs) =
   if (isSpace x)
     then triml xs
     else arr
 
-
+trimrhelper :: [Char] -> [Char] -> [Char] -> [Char]
 trimrhelper "" accm _ = reverse accm
 trimrhelper str accm total =
   let next = ((head str):total)
@@ -161,7 +163,7 @@ trimrhelper str accm total =
        trimrhelper (tail str) accm next
        else trimrhelper (tail str) next next
 
-
+trimr :: [Char] -> [Char]
 trimr []     = []
 trimr x = trimrhelper x "" ""
 

@@ -30,9 +30,9 @@ main :: IO ()
 main = bracket (listenOn $ PortNumber 1234) sClose $ \s -> forever $ do
   appMutex <- newMVar 0  -- for appht
   depMutex <- newMVar ()  -- for deployerht
-  (handle, hostname, portnum) <- accept s
-  forkIO $ handleConnection handle appMutex depMutex
-             `finally` hClose handle
+  (h, _, _) <- accept s
+  forkIO $ handleConnection h appMutex depMutex
+             `finally` hClose h
 
 handleConnection :: Handle -> MVar Int -> MVar () -> IO ()
 handleConnection chandle appMutex depMutex = foreverOrEOF chandle $ do
@@ -93,8 +93,8 @@ handleConnection chandle appMutex depMutex = foreverOrEOF chandle $ do
 
 foreverOrEOF :: Handle -> IO () -> IO ()
 foreverOrEOF h act = do
-    isEOF <- hIsEOF h
-    if isEOF then
+    eof <- hIsEOF h
+    if eof then
       return ()
       else do
         act
@@ -103,14 +103,17 @@ foreverOrEOF h act = do
 atomic :: MVar b -> IO a -> IO a
 atomic mtx act = withMVar mtx $ \_ -> act
 
+trim :: [Char] -> [Char]
 trim = triml . trimr
 
+triml :: [Char] -> [Char]
 triml [] = []
 triml arr@(x:xs) =
   if (isSpace x)
     then triml xs
     else arr
 
+trimrhelper :: [Char] -> [Char] -> [Char] -> [Char]
 trimrhelper "" accm _ = reverse accm
 trimrhelper str accm total =
   let next = ((head str):total)
@@ -118,6 +121,6 @@ trimrhelper str accm total =
        trimrhelper (tail str) accm next
        else trimrhelper (tail str) next next
 
-
+trimr :: [Char] -> [Char]
 trimr []     = []
 trimr x = trimrhelper x "" ""
