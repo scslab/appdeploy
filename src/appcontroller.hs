@@ -2,18 +2,11 @@ module Main where
 
 import Control.Exception
 import Control.Monad
-import System.FilePath
-import System.Directory
-import System.Process
 import Control.Concurrent
 import Data.Char
-import Data.List.Split
 import qualified Data.HashTable.IO as H
 import qualified Data.ByteString.Lazy as L
-import Data.Time.Clock
-import qualified Codec.Archive.Tar as Tar
 import Network
-import System.IO.Temp
 import System.IO
 import System.IO.Unsafe
 
