@@ -36,8 +36,8 @@ main = bracket (listenOn $ PortNumber 1234) sClose $ \s -> forever $ do
 
 handleConnection :: Handle -> MVar Int -> MVar () -> IO ()
 handleConnection chandle appMutex depMutex = foreverOrEOF chandle $ do
-    let port = PortNumber 9876
-        portnum = 9876
+    let portnum = 9876
+        port = PortNumber portnum
     cmd <- trim `fmap` hGetLine chandle
     case cmd of
         "statuses" -> do  -- show statuses of all app deployers in the hashtable
