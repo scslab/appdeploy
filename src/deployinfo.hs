@@ -13,7 +13,7 @@ data DeployInfo = DeployInfo {
   portnum :: Int
 }
 
-class Monad m => DeployTable d m where
+class Monad m => Table d m where
   addEntry :: d -> AppName -> DeployInfo -> m ()
   removeEntry :: d -> AppName -> DeployInfo -> m ()
   lookup :: d -> AppName -> m (Maybe DeployInfo)
