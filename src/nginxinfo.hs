@@ -3,6 +3,7 @@
 import Data.Maybe
 import Control.Monad.State
 import Control.Concurrent.MVar
+import Debug.Trace
 import qualified Data.HashTable.IO as H
 import Data.List
 import Data.List.Utils
@@ -28,14 +29,14 @@ instance Table FilePath IO where
     newh <- openFile tmppath ReadWriteMode  -- handle to modified config file
     let starttag = "# START: " ++ appname ++ (show $ identifier deployinfo)
         endtag = "# END: " ++ appname ++ (show $ identifier deployinfo)
-    let code = starttag ++  -- new code to add to the config file
+    let code = starttag ++ "\n" ++  -- new code to add to the config file
                "    server { \n\
                \        listen 8080; \n\
                \        server_name  task.lvh.me; \n\
                \        location / { \n\
                \           proxy_pass http://localhost:1234; \n\
                \        } \n\
-               \    }"
+               \    } \n"
                ++ endtag
     insertAt "http {" code oldh newh
     renameFile filepath (filepath ++ ".backup")
@@ -61,18 +62,27 @@ instance Table FilePath IO where
     --atomic htMutex $ H.delete ht appname
     let starttag = "# START: " ++ appname ++ (show $ identifier deployinfo)
         endtag = "# END: " ++ appname ++ (show $ identifier deployinfo)
-    withFile filepath ReadWriteMode $ \handle -> do
-      contents <- hGetContents handle
-      let allLines = lines contents
-          -- everything before start tag
-          before = takeWhile (\line -> not $ isInfixOf starttag line) allLines
-          -- everything after end tag
-          after = drop 1 $ dropWhile (\line -> not $ isInfixOf endtag line) allLines
-      let newcontents = before ++ after
-      hPutStr handle $ unlines newcontents
-      hClose handle
+    let backuppath = filepath ++ ".backup"
+    renameFile filepath backuppath
+    oldh <- openFile backuppath ReadWriteMode
+    newh <- openFile filepath ReadWriteMode
+    processFile oldh newh starttag endtag True
+    hClose oldh
+    hClose newh
     return ()
-            
+    where processFile oldh newh starttag endtag copymode = do
+            eof <- hIsEOF oldh
+            if eof then return () else do
+              line <- hGetLine oldh
+              trace ("line: " ++ line) $ return ()
+              trace ("copymode: " ++ show copymode) $ return ()
+              if (isInfixOf starttag line || isInfixOf endtag line) then
+                processFile oldh newh starttag endtag $ not copymode
+                else do
+                  if copymode then hPutStrLn newh line
+                    else return ()
+                  processFile oldh newh starttag endtag copymode
+
   lookup filepath appname = do
     -- todo: decide whether to add the app identifier as a parameter (there could be multiple instances of an app running)
     handle <- openFile filepath ReadWriteMode
@@ -98,7 +108,7 @@ instance Table FilePath IO where
                   let matches = fromJust $ matchRegex (mkRegex "http://[a-zA-Z0-9]+:([0-9]+);") line
                   -- matches = ["1234"] or whatever the portnum is
                   in return $ Just $ DeployInfo identifier hostname $ read $ head matches
-                  else getDeployInfo h identifier Nothing
+                  else getDeployInfo h identifier mhostname
               Nothing ->  -- hostname is still unknown; find the hostname
                 if (isInfixOf "server_name" line) then
                   let pattern = mkRegex "server_name[[:space:]]+([a-z[:punct:]]+);"

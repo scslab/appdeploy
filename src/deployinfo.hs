@@ -11,7 +11,7 @@ data DeployInfo = DeployInfo {
   identifier :: Int,
   hostname :: String,
   portnum :: Int
-}
+} deriving Show
 
 class Monad m => Table d m where
   addEntry :: d -> AppName -> DeployInfo -> m ()
