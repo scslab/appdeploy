@@ -133,7 +133,7 @@ startApp htMutex command envs cwdpath identifier retries = when (retries < 5) $ 
         let nextRetries = if (diffUTCTime endTime startTime < 30) then
                             retries + 1
                             else 0
-        startApp htMutex command envs cwdpath identifier nextRetries
+        trace "end of startApp" $ startApp htMutex command envs cwdpath identifier nextRetries
 
 readenvs :: Handle -> IO [(String,String)]
 readenvs h = go h []

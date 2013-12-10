@@ -20,7 +20,7 @@ import NginxUpdater
 -- have some way of knowing the statuses once this program dies/restarts
 -- know the availability of the deployers
 
-appht :: (H.BasicHashTable Int String)  -- hashtable of process id's and the hostnames of the deployers they run on
+appht :: (H.BasicHashTable Int String)  -- hashtable of app id's and the hostnames of the deployers they run on
 {-# NOINLINE appht #-}
 appht = unsafePerformIO $ H.new
 

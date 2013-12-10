@@ -10,6 +10,4 @@ What is broken:(
 Todo:
 - in nginxupdater: customize the conf file using the actual app name
   * pass an actual appname instead of a shell command to the nginx updater
-- restart nginx every time you update the conf file!
-- load balancing
 
