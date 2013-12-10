@@ -1,5 +1,7 @@
 {-# LANGUAGE TypeSynonymInstances, FlexibleInstances, MultiParamTypeClasses #-}
 
+module NginxUpdater where
+
 import Data.Maybe
 import Control.Monad.State
 import Control.Concurrent.MVar
@@ -7,23 +9,29 @@ import Debug.Trace
 import qualified Data.HashTable.IO as H
 import Data.List
 import Data.List.Utils
-import DeployInfo
 import System.Environment   
 import System.Directory  
 import System.IO  
 import System.IO.Unsafe
 import Text.Regex
 
+type AppName = String
+
+data DeployInfo = DeployInfo {
+  identifier :: Int,
+  hostname :: String,
+  portnum :: Int
+} deriving Show
+
+class Monad m => Table d m where
+  addEntry :: d -> AppName -> DeployInfo -> m ()
+  removeEntry :: d -> AppName -> DeployInfo -> m ()
+  lookup :: d -> AppName -> m (Maybe DeployInfo)
+
+
 instance Table FilePath IO where
 
-{-
-  ht :: (H.BasicHashTable AppName DeployInfo)
-  {-# NOINLINE ht #-}
-  ht = unsafePerformIO $ H.new
--}
-
   addEntry filepath appname deployinfo = do
-    --atomic htMutex $ H.insert ht appname deployinfo
     oldh <- openFile filepath ReadWriteMode  -- handle to current config file
     let tmppath = filepath ++ ".new"  -- temporary; will be copied back to filepath at the end
     newh <- openFile tmppath ReadWriteMode  -- handle to modified config file
@@ -32,8 +40,8 @@ instance Table FilePath IO where
     let code = starttag ++ "\n" ++  -- new code to add to the config file
                "    server { \n\
                \        listen 8080; \n\
-               \        server_name  task.lvh.me; \n\
-               \        location / { \n\
+               \        server_name  task.lvh.me; \n " ++  -- todo: change this to the actual url
+               "        location / { \n\
                \           proxy_pass http://localhost:1234; \n\
                \        } \n\
                \    } \n"
@@ -43,14 +51,19 @@ instance Table FilePath IO where
     renameFile tmppath filepath
     where insertAt tag newtext oldh newh = do
             eof <- hIsEOF oldh
-            if eof then return () else do
-              line <- hGetLine oldh
-              hPutStrLn newh line
-              if (isInfixOf tag line) then do -- if the http tag is part of the line
-                hPutStrLn newh newtext
-                copyRemainder oldh newh  -- copy the rest of the old file into the new file
-                else return ()
-              insertAt tag newtext oldh newh
+            if eof then do
+              hPutStrLn newh "http {"
+              hPutStrLn newh newtext
+              hPutStrLn newh "}"
+              hClose newh
+              return ()
+              else do
+                line <- hGetLine oldh
+                hPutStrLn newh line
+                if (isInfixOf tag line) then do -- if the http tag is part of the line
+                  hPutStrLn newh newtext
+                  copyRemainder oldh newh  -- copy the rest of the old file into the new file
+                  else insertAt tag newtext oldh newh
           copyRemainder oldh newh = do  -- copy the remainder of oldh's file into newh's file
             eof <- hIsEOF oldh
             if eof then return () else do
@@ -59,7 +72,6 @@ instance Table FilePath IO where
               copyRemainder oldh newh
 
   removeEntry filepath appname deployinfo = do
-    --atomic htMutex $ H.delete ht appname
     let starttag = "# START: " ++ appname ++ (show $ identifier deployinfo)
         endtag = "# END: " ++ appname ++ (show $ identifier deployinfo)
     let backuppath = filepath ++ ".backup"
@@ -116,5 +128,3 @@ instance Table FilePath IO where
                   in getDeployInfo h identifier $ Just hostname
                   else getDeployInfo h identifier Nothing
 
-atomic :: MVar b -> IO a -> IO a
-atomic mtx act = withMVar mtx $ \_ -> act

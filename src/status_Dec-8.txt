@@ -1,0 +1,15 @@
+
+What works:
+- all the functions (add, remove, lookup) in nginxupdater
+- passing tar files and data from controller to deployer
+- running apps manually using the tar files
+
+What is broken:(
+- when controller tells deployer to run an app, the app doesn't get added to the deployer's hashtable
+
+Todo:
+- in nginxupdater: customize the conf file using the actual app name
+  * pass an actual appname instead of a shell command to the nginx updater
+- restart nginx every time you update the conf file!
+- load balancing
+

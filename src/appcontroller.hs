@@ -6,9 +6,11 @@ import Control.Concurrent
 import Data.Char
 import qualified Data.HashTable.IO as H
 import qualified Data.ByteString.Lazy as L
+import Debug.Trace
 import Network
 import System.IO
 import System.IO.Unsafe
+import NginxUpdater
 
 -- read tar files in & send over network
 -- accept commands: "run this app"
@@ -36,8 +38,10 @@ main = bracket (listenOn $ PortNumber 1234) sClose $ \s -> forever $ do
 
 handleConnection :: Handle -> MVar Int -> MVar () -> IO ()
 handleConnection chandle appMutex depMutex = foreverOrEOF chandle $ do
-    let portnum = 9876
+    let portint = 9876
+        portnum = 9876
         port = PortNumber portnum
+        nginxfile = "nginx.conf"  -- todo: change this to the proper path
     cmd <- trim `fmap` hGetLine chandle
     case cmd of
         "statuses" -> do  -- show statuses of all app deployers in the hashtable
@@ -52,7 +56,7 @@ handleConnection chandle appMutex depMutex = foreverOrEOF chandle $ do
             hPutStrLn chandle statuses
         "run" -> do  -- run an app
             -- format:
-            -- app name
+            -- app name (aka command to be run)
             -- hostname of the deployer it should run on
             -- size of tar file
             -- tar file path
@@ -64,6 +68,8 @@ handleConnection chandle appMutex depMutex = foreverOrEOF chandle $ do
             dhandle <- connectTo hostname port  -- handle for the app deployer
             appId <- modifyMVar appMutex (\a -> return (a + 1, a))  -- allows multiple instances of same app to run
             atomic appMutex $ H.insert appht appId hostname
+            --addEntry nginxfile appname $ DeployInfo appId hostname portint
+            addEntry nginxfile "testapp" $ DeployInfo 1 "hi" 9876
             hPutStrLn dhandle "launch"
             hPutStrLn dhandle appname
             hPutStrLn dhandle $ show portnum
@@ -71,11 +77,19 @@ handleConnection chandle appMutex depMutex = foreverOrEOF chandle $ do
             hPutStrLn dhandle ""
             hPutStrLn dhandle filesize
             L.hPut dhandle tarBS
+            trace "finished run command" $ return ()
         "add" -> do  -- add a new deployer
+            -- format:
+            -- hostname
             hostname <- trim `fmap` hGetLine chandle
             let status = 1
             atomic depMutex $ H.insert deployerht hostname status
         "kill" -> do  -- kill an app
+            --removeEntry nginxfile "testapp" $ DeployInfo 1 "hi" 9876
+            -- format:
+            -- app name
+            -- appId
+            appname <- trim `fmap` hGetLine chandle
             appId <- (read . trim) `fmap` hGetLine chandle
             mhost <- atomic appMutex $ H.lookup appht appId
             case mhost of
@@ -86,6 +100,7 @@ handleConnection chandle appMutex depMutex = foreverOrEOF chandle $ do
                 hPutStrLn dhandle $ show appId
                 response <- hGetLine dhandle  -- OK or NOT FOUND
                 hPutStrLn chandle response
+                removeEntry nginxfile appname $ DeployInfo appId hostname portint
         _ -> do
             hPutStrLn chandle $ "INVALID COMMAND (" ++ cmd ++ ")"
 
