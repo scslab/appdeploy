@@ -58,26 +58,31 @@ handleConnection chandle appMutex depMutex = foreverOrEOF chandle $ do
             -- format:
             -- app name (aka command to be run)
             -- hostname of the deployer it should run on
+            -- var1=val1
+            -- var2=val2
+            -- ...
+            --
             -- size of tar file
             -- tar file path
             appname <- trim `fmap` hGetLine chandle
             hostname <- trim `fmap` hGetLine chandle  -- shouldn't be entered by the user
+            envs <- getEnvs chandle ""
             filesize <- trim `fmap` hGetLine chandle  -- todo: get filesize based on tarfile
             filename <- trim `fmap` hGetLine chandle
             tarBS <- L.readFile filename  -- convert to bytestring
-            dhandle <- connectTo hostname port  -- handle for the app deployer
             appId <- modifyMVar appMutex (\a -> return (a + 1, a))  -- allows multiple instances of same app to run
             atomic appMutex $ H.insert appht appId hostname
+            dhandle <- connectTo hostname port  -- handle for the app deployer
             --addEntry nginxfile appname $ DeployInfo appId hostname portint
             addEntry nginxfile "testapp" $ DeployInfo 1 "hi" 9876
             hPutStrLn dhandle "launch"
             hPutStrLn dhandle appname
-            hPutStrLn dhandle $ show portnum
+            hPutStrLn dhandle $ show appId
             hPutStrLn dhandle ("PORT=" ++ show portnum)
-            hPutStrLn dhandle ""
+            hPutStrLn dhandle envs
+            --hPutStrLn dhandle ""
             hPutStrLn dhandle filesize
             L.hPut dhandle tarBS
-            trace "finished run command" $ return ()
         "add" -> do  -- add a new deployer
             -- format:
             -- hostname
@@ -105,6 +110,13 @@ handleConnection chandle appMutex depMutex = foreverOrEOF chandle $ do
             hPutStrLn chandle $ "INVALID COMMAND (" ++ cmd ++ ")"
 
 -- Utils
+
+getEnvs :: Handle -> String -> IO String
+getEnvs h str = do  -- pass a list of env variables from sender to recipient
+  line <- hGetLine h
+  case line of
+    "" -> return str
+    var -> getEnvs h (str ++ var)
 
 foreverOrEOF :: Handle -> IO () -> IO ()
 foreverOrEOF h act = do

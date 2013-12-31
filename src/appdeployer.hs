@@ -8,7 +8,7 @@ import System.Process
 import Control.Concurrent
 import Data.Char
 import Data.List.Split
-import Debug.Trace
+--import Debug.Trace
 import qualified Data.HashTable.IO as H
 import qualified Data.ByteString.Lazy as L
 import Data.Time.Clock
@@ -64,12 +64,10 @@ handleConnection h htMutex = foreverOrEOF h $ do
             --
             -- num bytes
             -- tar data
-            trace "launch called" $ return ()
             shellcmd <- trim `fmap` hGetLine h 
             identifier <- (read . trim) `fmap` hGetLine h 
             envs <- readenvs h
             nbytes <- read `fmap` hGetLine h
-            trace ("nbytes: " ++ show nbytes) $ return ()
             tarfile <- L.hGet h nbytes
             let entries = Tar.read tarfile
             --createDirectory tmpDir
@@ -100,7 +98,6 @@ startApp :: MVar Int
             -> Int                -- Retries
             -> IO ()
 startApp htMutex command envs cwdpath identifier retries = when (retries < 5) $ do 
-    trace "startApp called" $ return ()
     output <- openFile (cwdpath </> "log.out") AppendMode
     err <- openFile (cwdpath </> "log.err") AppendMode
     input <- openFile "/dev/null" ReadMode
@@ -133,7 +130,7 @@ startApp htMutex command envs cwdpath identifier retries = when (retries < 5) $ 
         let nextRetries = if (diffUTCTime endTime startTime < 30) then
                             retries + 1
                             else 0
-        trace "end of startApp" $ startApp htMutex command envs cwdpath identifier nextRetries
+        startApp htMutex command envs cwdpath identifier nextRetries
 
 readenvs :: Handle -> IO [(String,String)]
 readenvs h = go h []
