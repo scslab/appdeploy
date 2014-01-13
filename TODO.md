@@ -4,8 +4,7 @@
 
 1. Remove global hashtables (maybe use ReaderT)
 
-2. Proactively notify controller of changes in app states
-  * When app dies
+2. Assign apps an actual name other than the shell command
 
 ## AppController
 

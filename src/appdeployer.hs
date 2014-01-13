@@ -116,11 +116,8 @@ startApp htMutex command envs cwdpath identifier retries = when (retries < 5) $ 
       hClose stderr
       hClose stdin
       H.insert ht identifier pHandle
-      hPutStrLn h "hi"
-      hPutStrLn h "inserted id into hashtable"
       return pHandle
     statusList <- atomic htMutex $ H.toList ht 
-    hPutStrLn h ("hashtable: " ++ (show $ map fst statusList))
     hClose h
     startTime <- getCurrentTime
     _ <- waitForProcess pHandle
@@ -130,10 +127,22 @@ startApp htMutex command envs cwdpath identifier retries = when (retries < 5) $ 
       Nothing -> removeDirectoryRecursive cwdpath
       Just _ -> do
         atomic htMutex $ H.delete ht identifier
+        removeFromController command identifier
         let nextRetries = if (diffUTCTime endTime startTime < 30) then
                             retries + 1
                             else 0
-        trace "end of startApp" $ startApp htMutex command envs cwdpath identifier nextRetries
+        startApp htMutex command envs cwdpath identifier nextRetries
+
+
+-- Utils
+
+removeFromController appname identifier = do
+  let hostname = "localhost"  -- hostname of the app controller
+      port = PortNumber 1234  -- port of the app controller
+  handle <- connectTo hostname port  -- handle for the app controller
+  hPutStrLn handle "remove"
+  hPutStrLn handle appname
+  hPutStrLn handle $ show identifier
 
 readenvs :: Handle -> IO [(String,String)]
 readenvs h = go h []
@@ -152,11 +161,6 @@ parseEnv envString =
 
 atomic :: MVar b -> IO a -> IO a
 atomic mtx act = withMVar mtx $ \_ -> act
-
---
--- isSpace :: Char -> Bool
--- if the character is one of ' ', '\t', '\n', '\r'...
---
 
 trim :: [Char] -> [Char]
 trim = triml . trimr

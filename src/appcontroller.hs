@@ -20,11 +20,11 @@ import NginxUpdater
 -- have some way of knowing the statuses once this program dies/restarts
 -- know the availability of the deployers
 
-appht :: (H.BasicHashTable Int String)  -- hashtable of app id's and the hostnames of the deployers they run on
+appht :: (H.BasicHashTable Int String)  -- app id's and the hostnames of the deployers they run on
 {-# NOINLINE appht #-}
 appht = unsafePerformIO $ H.new
 
-deployerht :: (H.BasicHashTable String Int)  -- hashtable of deployer hostnames and their statuses (as ints for now)
+deployerht :: (H.BasicHashTable String Int)  -- deployer hostnames and their statuses (0 or 1)
 {-# NOINLINE deployerht #-}
 deployerht = unsafePerformIO $ H.new
 
@@ -100,6 +100,18 @@ handleConnection chandle appMutex depMutex = foreverOrEOF chandle $ do
                 hPutStrLn dhandle $ show appId
                 response <- hGetLine dhandle  -- OK or NOT FOUND
                 hPutStrLn chandle response
+                removeEntry nginxfile appname $ DeployInfo appId hostname portint
+        "remove" -> do
+            -- remove an app from the ht (deployer will invoke this function when an app dies without the kill command)
+            -- format:
+            -- app name
+            -- appId
+            appname <- trim `fmap` hGetLine chandle
+            appId <- (read . trim) `fmap` hGetLine chandle
+            mhostname <- atomic appMutex $ H.lookup appht appId
+            case mhostname of
+              Nothing -> return ()
+              Just hostname -> do
                 removeEntry nginxfile appname $ DeployInfo appId hostname portint
         _ -> do
             hPutStrLn chandle $ "INVALID COMMAND (" ++ cmd ++ ")"
