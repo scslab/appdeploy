@@ -13,6 +13,7 @@ import System.Environment
 import System.Directory  
 import System.IO  
 import System.IO.Unsafe
+import System.Process
 import Text.Regex
 
 type AppName = String
@@ -49,6 +50,7 @@ instance Table FilePath IO where
     insertAt "http {" code oldh newh
     renameFile filepath (filepath ++ ".backup")
     renameFile tmppath filepath
+    restartNginx
     where insertAt tag newtext oldh newh = do
             eof <- hIsEOF oldh
             if eof then do
@@ -81,7 +83,7 @@ instance Table FilePath IO where
     processFile oldh newh starttag endtag True
     hClose oldh
     hClose newh
-    return ()
+    restartNginx
     where processFile oldh newh starttag endtag copymode = do
             eof <- hIsEOF oldh
             if eof then return () else do
@@ -127,4 +129,10 @@ instance Table FilePath IO where
                       hostname = head $ fromJust $ matchRegex pattern line
                   in getDeployInfo h identifier $ Just hostname
                   else getDeployInfo h identifier Nothing
+
+
+restartNginx = do
+  let createProc = shell "nginx -s reload"
+  (_, _, _, handle) <- createProcess createProc
+  return ()
 
