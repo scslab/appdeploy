@@ -33,6 +33,7 @@ main = bracket (listenOn $ PortNumber 1234) sClose $ \s -> forever $ do
   appMutex <- newMVar 0  -- for appht
   depMutex <- newMVar ()  -- for deployerht
   (h, _, _) <- accept s
+  --getAppInfo h appMutex
   forkIO $ handleConnection h appMutex depMutex
              `finally` hClose h
 
@@ -58,10 +59,15 @@ handleConnection chandle appMutex depMutex = foreverOrEOF chandle $ do
             -- format:
             -- app name (aka command to be run)
             -- hostname of the deployer it should run on
+            -- var1=val1
+            -- var2=val2
+            -- ...
+            --
             -- size of tar file
             -- tar file path
             appname <- trim `fmap` hGetLine chandle
             hostname <- trim `fmap` hGetLine chandle  -- shouldn't be entered by the user
+            envs <- readEnvs chandle
             filesize <- trim `fmap` hGetLine chandle  -- todo: get filesize based on tarfile
             filename <- trim `fmap` hGetLine chandle
             tarBS <- L.readFile filename  -- convert to bytestring
@@ -69,12 +75,13 @@ handleConnection chandle appMutex depMutex = foreverOrEOF chandle $ do
             appId <- modifyMVar appMutex (\a -> return (a + 1, a))  -- allows multiple instances of same app to run
             atomic appMutex $ H.insert appht appId hostname
             --addEntry nginxfile appname $ DeployInfo appId hostname portint
-            addEntry nginxfile "testapp" $ DeployInfo 1 "hi" 9876
+            addEntry nginxfile "testapp" $ DeployInfo 1 "hi" 9876  -- todo
             hPutStrLn dhandle "launch"
             hPutStrLn dhandle appname
             hPutStrLn dhandle $ show portnum
             hPutStrLn dhandle ("PORT=" ++ show portnum)
-            hPutStrLn dhandle ""
+            hPutStrLn dhandle envs
+            --hPutStrLn dhandle ""
             hPutStrLn dhandle filesize
             L.hPut dhandle tarBS
             trace "finished run command" $ return ()
@@ -118,6 +125,12 @@ handleConnection chandle appMutex depMutex = foreverOrEOF chandle $ do
 
 -- Utils
 
+{-
+getAppInfo :: Handle -> MVar Int -> IO ()
+getAppInfo h appMutex = do  -- talk to all the deployers and get status of apps.  useful for when appcontroller is restarted.
+  hPutStrLn h "statuses"
+-}
+
 foreverOrEOF :: Handle -> IO () -> IO ()
 foreverOrEOF h act = do
     eof <- hIsEOF h
@@ -151,3 +164,21 @@ trimrhelper str accm total =
 trimr :: [Char] -> [Char]
 trimr []     = []
 trimr x = trimrhelper x "" ""
+
+readEnvs :: Handle -> IO String
+readEnvs h = do
+  str <- readEnvHelper h ""
+  trace ("envs to be printed: " ++ str ++ "end of envs") $ return ()
+  return str
+
+readEnvHelper h envs = do
+  line <- trim `fmap` hGetLine h
+  case line of
+    "" -> return envs
+    env -> readEnvHelper h (envs ++ env)
+
+{-
+    "" -> if envs == "" then return "\n"
+            else return envs
+    env -> readEnvHelper h (envs ++ env ++ "\n")
+-}

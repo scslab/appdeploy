@@ -10,9 +10,7 @@
 
 1. Remove global hashtables
 
-2. Keep appht in sync with deployers
-
-3. Handle restarts by filling in appht with already running apps by talking to deployers
+2. Handle restarts by filling in appht with already running apps by talking to deployers
 
 ## Nginx
 
