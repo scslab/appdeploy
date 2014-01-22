@@ -8,7 +8,6 @@ import Control.Concurrent.MVar
 import Debug.Trace
 import qualified Data.HashTable.IO as H
 import Data.List
-import Data.List.Utils
 import System.Environment   
 import System.Directory  
 import System.IO  

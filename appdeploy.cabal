@@ -41,8 +41,13 @@ executable appcontroller
   build-depends:
       base < 6.0
     , bytestring
+    , directory
     , hashtables
     , network
+    , mtl
     , temporary
+    , process
+    , regex-compat
+    , split
   hs-source-dirs:      src
   default-language:    Haskell2010
