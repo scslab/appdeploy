@@ -106,16 +106,13 @@ startApp htMutex command envs cwdpath identifier retries = when (retries < 5) $ 
                                      , std_in = UseHandle input
                                      , std_out = UseHandle output
                                      , std_err = UseHandle err }
-    h <- openFile "log" ReadWriteMode
     pHandle <- atomic htMutex $ do
       (_, _, _, pHandle) <- createProcess createProc
-      hClose stdout
-      hClose stderr
-      hClose stdin
+      hClose output
+      hClose err
+      hClose input
       H.insert ht identifier pHandle
       return pHandle
-    statusList <- atomic htMutex $ H.toList ht 
-    hClose h
     startTime <- getCurrentTime
     _ <- waitForProcess pHandle
     endTime <- getCurrentTime
