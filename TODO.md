@@ -1,16 +1,12 @@
 # TODO
 
-## AppDeployer
+## AppDeployer & AppController
 
-1. Remove global hashtables (maybe use ReaderT)
+1. Remove global hashtables in both
 
-2. Assign apps an actual name other than the shell command
+2. Save contents of hashtables in a file so that the data is not lost when the controller restarts
 
-## AppController
-
-1. Remove global hashtables
-
-2. Handle restarts by filling in appht with already running apps by talking to deployers
+3. Assign apps an actual name other than the shell command
 
 ## Nginx
 

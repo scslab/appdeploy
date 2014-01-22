@@ -70,15 +70,11 @@ handleConnection h htMutex = foreverOrEOF h $ do
             nbytes <- read `fmap` hGetLine h
             tarfile <- L.hGet h nbytes
             let entries = Tar.read tarfile
-            --createDirectory tmpDir
             Tar.unpack tmpDir entries
-            --tmppath <- createTempDirectory tmpDir "appdeploy"
-            --Tar.unpack tmppath entries
-            --void $ forkIO $ startApp htMutex shellcmd envs tmppath identifier 0
             void $ forkIO $ startApp htMutex shellcmd envs tmpDir identifier 0
-            --oldId <- modifyMVar htMutex (\a -> return (a + 1, a))
-            --void $ forkIO $ startApp htMutex shellcmd env tmppath oldId 0
         "kill" -> atomic htMutex $ do  -- OK or NOT FOUND
+            -- format:
+            -- app identifier
             key <- (read . trim) `fmap` hGetLine h 
             mPHandle <- H.lookup ht key 
             case mPHandle of
@@ -178,3 +174,11 @@ trimr :: [Char] -> [Char]
 trimr []     = []
 trimr x = trimrhelper x "" ""
 
+{- this used to be part of the "launch" command:
+            createDirectory tmpDir
+            tmppath <- createTempDirectory tmpDir "appdeploy"
+            Tar.unpack tmppath entries
+            void $ forkIO $ startApp htMutex shellcmd envs tmppath identifier 0
+            oldId <- modifyMVar htMutex (\a -> return (a + 1, a))
+            void $ forkIO $ startApp htMutex shellcmd env tmppath oldId 0
+-}
