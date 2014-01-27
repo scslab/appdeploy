@@ -4,9 +4,7 @@
 
 1. Remove global hashtables in both
 
-2. Save contents of hashtables in a file so that the data is not lost when the controller restarts
-
-3. Assign apps an actual name other than the shell command
+2. Assign apps an actual name other than the shell command
 
 ## Nginx
 

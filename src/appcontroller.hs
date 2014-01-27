@@ -11,6 +11,7 @@ import Network
 import System.IO
 import System.IO.Unsafe
 import NginxUpdater
+import Utils
 
 -- read tar files in & send over network
 -- accept commands: "run this app"
@@ -24,16 +25,29 @@ appht :: (H.BasicHashTable Int String)  -- app id's and the hostnames of the dep
 {-# NOINLINE appht #-}
 appht = unsafePerformIO $ H.new
 
+appFile :: FilePath  -- backup of appht, with key/value pairs separated by commas
+appFile = "appinfo.txt"
+
 deployerht :: (H.BasicHashTable String Int)  -- deployer hostnames and their statuses (0 or 1)
 {-# NOINLINE deployerht #-}
 deployerht = unsafePerformIO $ H.new
+
+deployerFile :: FilePath  -- backup of deployerht, with key/value pairs separated by commas
+deployerFile = "deployerinfo.txt"
+
+test = do
+  ht <- H.new
+  H.insert ht "key" "val"
+  fillTable "testht" ht 
+  list <- H.toList ht
+  trace (show list) $ return ()
 
 main :: IO ()
 main = bracket (listenOn $ PortNumber 1234) sClose $ \s -> forever $ do
   appMutex <- newMVar 0  -- for appht
   depMutex <- newMVar ()  -- for deployerht
   (h, _, _) <- accept s
-  --getAppInfo h appMutex
+  -- TODO: put info from files into the hashtables
   forkIO $ handleConnection h appMutex depMutex
              `finally` hClose h
 
@@ -73,7 +87,9 @@ handleConnection chandle appMutex depMutex = foreverOrEOF chandle $ do
             tarBS <- L.readFile filename  -- convert to bytestring
             dhandle <- connectTo hostname port  -- handle for the app deployer
             appId <- modifyMVar appMutex (\a -> return (a + 1, a))  -- allows multiple instances of same app to run
-            atomic appMutex $ H.insert appht appId hostname
+            atomic appMutex $ do
+              H.insert appht appId hostname
+              addToFile appFile (show appId) hostname
             --addEntry nginxfile appname $ DeployInfo appId hostname portint
             addEntry nginxfile "testapp" $ DeployInfo 1 "hi" 9876  -- todo
             hPutStrLn dhandle "launch"
@@ -90,7 +106,9 @@ handleConnection chandle appMutex depMutex = foreverOrEOF chandle $ do
             -- hostname
             hostname <- trim `fmap` hGetLine chandle
             let status = 1
-            atomic depMutex $ H.insert deployerht hostname status
+            atomic depMutex $ do
+              H.insert deployerht hostname status
+              addToFile deployerFile hostname $ show status
         "kill" -> do  -- kill an app
             --removeEntry nginxfile "testapp" $ DeployInfo 1 "hi" 9876
             -- format:
@@ -123,47 +141,8 @@ handleConnection chandle appMutex depMutex = foreverOrEOF chandle $ do
         _ -> do
             hPutStrLn chandle $ "INVALID COMMAND (" ++ cmd ++ ")"
 
+
 -- Utils
-
-{-
-getAppInfo :: Handle -> MVar Int -> IO ()
-getAppInfo h appMutex = do  -- talk to all the deployers and get status of apps.  useful for when appcontroller is restarted.
-  hPutStrLn h "statuses"
--}
-
-foreverOrEOF :: Handle -> IO () -> IO ()
-foreverOrEOF h act = do
-    eof <- hIsEOF h
-    if eof then
-      return ()
-      else do
-        act
-        foreverOrEOF h act
-
-atomic :: MVar b -> IO a -> IO a
-atomic mtx act = withMVar mtx $ \_ -> act
-
-trim :: [Char] -> [Char]
-trim = triml . trimr
-
-triml :: [Char] -> [Char]
-triml [] = []
-triml arr@(x:xs) =
-  if (isSpace x)
-    then triml xs
-    else arr
-
-trimrhelper :: [Char] -> [Char] -> [Char] -> [Char]
-trimrhelper "" accm _ = reverse accm
-trimrhelper str accm total =
-  let next = ((head str):total)
-  in if isSpace $ head str then
-       trimrhelper (tail str) accm next
-       else trimrhelper (tail str) next next
-
-trimr :: [Char] -> [Char]
-trimr []     = []
-trimr x = trimrhelper x "" ""
 
 readEnvs :: Handle -> IO String
 readEnvs h = do
@@ -177,8 +156,3 @@ readEnvHelper h envs = do
     "" -> return envs
     env -> readEnvHelper h (envs ++ env)
 
-{-
-    "" -> if envs == "" then return "\n"
-            else return envs
-    env -> readEnvHelper h (envs ++ env ++ "\n")
--}
