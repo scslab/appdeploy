@@ -40,7 +40,7 @@ main = bracket (listenOn $ PortNumber 9876) sClose $ \s -> do
                `finally` hClose h
 
 handleConnection :: Handle -> MVar Int -> IO ()
-handleConnection h htMutex = foreverOrEOF h $ do
+handleConnection h htMutex = foreverOrEOF2 h $ do
     cmd <- trim `fmap` hGetLine h
     case cmd of
         "statuses" -> do  -- prints list of processes
@@ -148,3 +148,4 @@ parseEnv envString =
             oldId <- modifyMVar htMutex (\a -> return (a + 1, a))
             void $ forkIO $ startApp htMutex shellcmd env tmppath oldId 0
 -}
+

@@ -18,19 +18,19 @@ addToFile filepath key value = do  -- NOTE: key must not contain commas
 fillTable :: FilePath -> H.BasicHashTable String String -> IO ()
 fillTable filepath ht = do
   h <- openFile filepath ReadWriteMode
-  foreverOrEOF h $ do
+  foreverOrEOF2 h $ do
     entry <- hGetLine h
     let [key,val] = split "," entry
     H.insert ht key val
     
-foreverOrEOF :: Handle -> IO () -> IO ()
-foreverOrEOF h act = do
+foreverOrEOF2 :: Handle -> IO () -> IO ()
+foreverOrEOF2 h act = do
     eof <- hIsEOF h
     if eof then
       return ()
       else do
         act
-        foreverOrEOF h act
+        foreverOrEOF2 h act
 
 atomic :: MVar b -> IO a -> IO a
 atomic mtx act = withMVar mtx $ \_ -> act

@@ -14,11 +14,16 @@ import qualified Data.HashTable.ST.Basic as HST
 import Data.Maybe
 import Data.Monoid
 import Control.Monad.Trans.State
+import Debug.Trace
 import System.IO
+import NginxUpdater
 
 type JobId = Int
 
 type DeployerId = String
+
+nginxfile :: String
+nginxfile = "nginx.conf"
 
 data Deployer = Deployer { deployerId :: DeployerId
                          , deployerPut :: S.ByteString -> IO ()
@@ -36,26 +41,29 @@ deployerFromHandle did handle = return $
 
 type DeployerStatus = Int
 
+-- TODO: Add environment variables?
 data Job = Job { jobId :: JobId
-               , jobName :: S.ByteString
+               , jobName :: S.ByteString  -- the name of the app
+               , jobCommand :: S.ByteString  -- the shell command to be run
                , jobTarballSize :: Integer
-               , jobTarballWriter :: (S.ByteString -> IO ()) -> IO () }
+               , jobTarballWriter :: (S.ByteString -> IO ()) -> IO ()  -- takes in deployerPut function and writes tarball to deployer
+               }
 
 data ControllerState = ControllerState
-      { ctrlJobs :: H.BasicHashTable JobId (MVar Deployer)
-      , ctrlDeployers :: H.BasicHashTable DeployerId (MVar Deployer) }
+      { ctrlJobs :: H.BasicHashTable JobId (MVar Deployer)  -- job id's and their deployers
+      , ctrlDeployers :: H.BasicHashTable DeployerId (MVar Deployer) }  -- deployer id's and deployers
 
-type Controller = StateT ControllerState IO
+type Controller = StateT ControllerState IO  -- stores a ControllerState along with every action
 
 removeDeployer :: DeployerId -> Controller ()
 removeDeployer did = do
-  deployers <- gets ctrlDeployers
+  deployers <- gets ctrlDeployers  -- ht of dId's and deployers
   liftIO $ do
     md <- stToIO $ do
-            md <- HST.lookup deployers did
-            when (isJust md) $ HST.delete deployers did
+            md <- HST.lookup deployers did  -- the mvar deployer
+            when (isJust md) $ HST.delete deployers did  -- if deployer exists, delete it from ht
             return md
-    when (isJust md) $ withMVar (fromJust md) deployerClose
+    when (isJust md) $ withMVar (fromJust md) deployerClose  -- close the handle
 
 addDeployer :: Deployer -> Controller ()
 addDeployer deployer = do
@@ -72,7 +80,8 @@ chooseDeployer job = do
 withDeployer :: Maybe (Controller a) -> MVar Deployer -> (Deployer -> Controller a) -> Controller a
 withDeployer mretry mdeployer func = do
   bracket (liftIO $ takeMVar mdeployer) (liftIO . putMVar mdeployer) $ \deployer ->
-    func deployer `catch`
+    -- get the mdeployer out of its mvar, do the stuff below, and then put it back
+    func deployer `catch`  -- what happens if the deployer is down or whatever
       (\(e :: IOException) -> do
           deployers <- gets ctrlDeployers
           liftIO $ H.delete deployers $ deployerId deployer
@@ -86,24 +95,28 @@ crlf = "\r\n"
 deployJob :: Job -> Controller ()
 deployJob job = do
   md <- chooseDeployer job
-  withDeployer (Just $ deployJob job) md $ \deployer -> do
+  withDeployer (Just $ deployJob job) md $ \deployer -> do  -- to retry, just run deployJob again
     liftIO $ do
       deployerPut deployer $
         "launch" <> crlf
-          <> jobName job <> crlf
+          <> jobCommand job <> crlf
           <> (S8.pack . show $ jobTarballSize job) <> crlf
       jobTarballWriter job $ deployerPut deployer
     jobs <- gets ctrlJobs
-    liftIO $ H.insert jobs (jobId job) md
+    liftIO $ do
+      --addEntry nginxfile appname $ DeployInfo appId hostname portint
+      --atomic appMutex $ addToFile appFile (show appId) hostname
+      H.insert jobs (jobId job) md
 
 killJob :: JobId -> Controller (Either String ())
 killJob jobId = do
-  jobs <- gets ctrlJobs
-  md <- liftIO $ H.lookup jobs jobId
+  jobs <- gets ctrlJobs  -- job id's + deployers
+  md <- liftIO $ H.lookup jobs jobId  -- deployer
   case md of
     Nothing -> return . Left $ "No job found with id " ++ (show jobId)
-    Just dmv -> withDeployer Nothing dmv $ \deployer -> liftIO $ do
+    Just dmv -> withDeployer Nothing dmv $ \deployer -> liftIO $ do  -- dmv = deployer mvar
       H.delete jobs jobId
+      --removeEntry nginxfile appname $ DeployInfo jobId hostname portint
       deployerPut deployer $ "kill" <> crlf <> (S8.pack $ show jobId) <> crlf
       ln <- deployerGetLine deployer
       if ln == "NOT FOUND" then
@@ -114,6 +127,7 @@ deployerStats :: DeployerId -> Controller (Either String S.ByteString)
 deployerStats did = do
   deployers <- gets ctrlDeployers
   mdvar <- liftIO $ H.lookup deployers did
+  liftIO $ trace "got deployers and mdvar" $ return ()
   case mdvar of
     Nothing -> return $ Left $ "No deployer with id " ++ (show did)
     Just dvar -> do
@@ -123,3 +137,4 @@ deployerStats did = do
 
 removeJob :: JobId -> Controller ()
 removeJob jobId = gets ctrlJobs >>= \jobs -> liftIO $ H.delete jobs jobId
+

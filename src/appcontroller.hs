@@ -1,46 +1,30 @@
 module Main where
 
+import Control.Applicative
+import Control.Concurrent
 import Control.Exception
 import Control.Monad
-import Control.Concurrent
+import Control.Monad.IO.Class
+import Control.Monad.Trans.State
 import Data.Char
 import qualified Data.HashTable.IO as H
 import qualified Data.ByteString.Lazy as L
+import qualified Data.ByteString as S
+import qualified Data.ByteString.Char8 as S8
 import Debug.Trace
 import Network
 import System.IO
 import System.IO.Unsafe
+import Deploy.Controller
 import NginxUpdater
 import Utils
 
--- read tar files in & send over network
--- accept commands: "run this app"
--- communicate w/ app deployer about statuses of apps
--- load balancing
--- kill commands
--- have some way of knowing the statuses once this program dies/restarts
--- know the availability of the deployers
-
-appht :: (H.BasicHashTable Int String)  -- app id's and the hostnames of the deployers they run on
-{-# NOINLINE appht #-}
-appht = unsafePerformIO $ H.new
-
+-- TODO: figure out what to do with these files now that the hashtables are gone
 appFile :: FilePath  -- backup of appht, with key/value pairs separated by commas
 appFile = "appinfo.txt"
 
-deployerht :: (H.BasicHashTable String Int)  -- deployer hostnames and their statuses (0 or 1)
-{-# NOINLINE deployerht #-}
-deployerht = unsafePerformIO $ H.new
-
 deployerFile :: FilePath  -- backup of deployerht, with key/value pairs separated by commas
 deployerFile = "deployerinfo.txt"
-
-test = do
-  ht <- H.new
-  H.insert ht "key" "val"
-  fillTable "testht" ht 
-  list <- H.toList ht
-  trace (show list) $ return ()
 
 main :: IO ()
 main = bracket (listenOn $ PortNumber 1234) sClose $ \s -> forever $ do
@@ -48,98 +32,92 @@ main = bracket (listenOn $ PortNumber 1234) sClose $ \s -> forever $ do
   depMutex <- newMVar ()  -- for deployerht
   (h, _, _) <- accept s
   -- TODO: put info from files into the hashtables
-  forkIO $ handleConnection h appMutex depMutex
-             `finally` hClose h
+  jobs <- H.new
+  deployers <- H.new
+  let state = ControllerState jobs deployers
+  forkIO $ do
+    x <- execStateT (handleConnection h appMutex depMutex) state
+    hClose h
+  {-
+  (forkIO $ do
+     x <- execStateT (handleConnection h appMutex depMutex) state
+     return ())
+     `finally` hClose h
+  -}
+  return ()
 
-handleConnection :: Handle -> MVar Int -> MVar () -> IO ()
+handleConnection :: Handle -> MVar Int -> MVar () -> Controller ()
 handleConnection chandle appMutex depMutex = foreverOrEOF chandle $ do
     let portint = 9876
         portnum = 9876
         port = PortNumber portnum
-        nginxfile = "nginx.conf"  -- todo: change this to the proper path
-    cmd <- trim `fmap` hGetLine chandle
+    cmd <- liftIO $ trim `fmap` hGetLine chandle
     case cmd of
-        "statuses" -> do  -- show statuses of all app deployers in the hashtable
-            deployerList <- atomic depMutex $ H.toList deployerht
-            hPutStrLn chandle (show $ map fst deployerList)
-            return ()
-        "deployer" -> do  -- show statuses of all apps of a deployer
-            hostname <- trim `fmap` hGetLine chandle  -- which port the deployer runs on
-            dhandle <- connectTo hostname port  -- handle for the app deployer
-            hPutStrLn dhandle "statuses"
-            statuses <- hGetLine dhandle
-            hPutStrLn chandle statuses
-        "run" -> do  -- run an app
-            -- format:
-            -- app name (aka command to be run)
-            -- hostname of the deployer it should run on
-            -- var1=val1
-            -- var2=val2
-            -- ...
-            --
-            -- size of tar file
-            -- tar file path
-            appname <- trim `fmap` hGetLine chandle
-            hostname <- trim `fmap` hGetLine chandle  -- shouldn't be entered by the user
-            envs <- readEnvs chandle
-            filesize <- trim `fmap` hGetLine chandle  -- todo: get filesize based on tarfile
-            filename <- trim `fmap` hGetLine chandle
-            tarBS <- L.readFile filename  -- convert to bytestring
-            dhandle <- connectTo hostname port  -- handle for the app deployer
-            appId <- modifyMVar appMutex (\a -> return (a + 1, a))  -- allows multiple instances of same app to run
-            atomic appMutex $ do
-              H.insert appht appId hostname
-              addToFile appFile (show appId) hostname
-            --addEntry nginxfile appname $ DeployInfo appId hostname portint
-            addEntry nginxfile "testapp" $ DeployInfo 1 "hi" 9876  -- todo
-            hPutStrLn dhandle "launch"
-            hPutStrLn dhandle appname
-            hPutStrLn dhandle $ show portnum
-            hPutStrLn dhandle ("PORT=" ++ show portnum)
-            hPutStrLn dhandle envs
-            --hPutStrLn dhandle ""
-            hPutStrLn dhandle filesize
-            L.hPut dhandle tarBS
-            trace "finished run command" $ return ()
-        "add" -> do  -- add a new deployer
-            -- format:
-            -- hostname
-            hostname <- trim `fmap` hGetLine chandle
-            let status = 1
-            atomic depMutex $ do
-              H.insert deployerht hostname status
-              addToFile deployerFile hostname $ show status
-        "kill" -> do  -- kill an app
-            --removeEntry nginxfile "testapp" $ DeployInfo 1 "hi" 9876
-            -- format:
-            -- app name
-            -- appId
-            appname <- trim `fmap` hGetLine chandle
-            appId <- (read . trim) `fmap` hGetLine chandle
-            mhost <- atomic appMutex $ H.lookup appht appId
-            case mhost of
-              Nothing -> hPutStrLn chandle "NOT FOUND"
-              Just hostname -> do
-                dhandle <- connectTo hostname port  -- handle for the app deployer
-                hPutStrLn dhandle "kill"
-                hPutStrLn dhandle $ show appId
-                response <- hGetLine dhandle  -- OK or NOT FOUND
-                hPutStrLn chandle response
-                removeEntry nginxfile appname $ DeployInfo appId hostname portint
-        "remove" -> do
-            -- remove an app from the ht (deployer will invoke this function when an app dies without the kill command)
-            -- format:
-            -- app name
-            -- appId
-            appname <- trim `fmap` hGetLine chandle
-            appId <- (read . trim) `fmap` hGetLine chandle
-            mhostname <- atomic appMutex $ H.lookup appht appId
-            case mhostname of
-              Nothing -> return ()
-              Just hostname -> do
-                removeEntry nginxfile appname $ DeployInfo appId hostname portint
-        _ -> do
-            hPutStrLn chandle $ "INVALID COMMAND (" ++ cmd ++ ")"
+      "statuses" -> do  -- show statuses of all app deployers in the hashtable
+          deployerht <- gets ctrlDeployers  -- ht of dId's and deployers
+          liftIO $ do
+            deployerList <- H.toList deployerht
+            mdeployers <- mapM (takeMVar . snd) deployerList  -- list of mvar deployers
+            hPutStrLn chandle $ show $ map deployerId mdeployers  -- TODO
+      "deployer" -> do  -- show statuses of all apps of a deployer
+          -- format:
+          -- hostname
+          hostname <- liftIO $ trim `fmap` hGetLine chandle 
+          liftIO $ trace (show hostname) $ return ()
+          estats <- deployerStats hostname
+          liftIO $ trace (show estats) $ return ()
+          liftIO $ case estats of
+            Left msg -> hPutStrLn chandle msg
+            Right msg -> hPutStrLn chandle $ S8.unpack msg
+      "run" -> do  -- run an app
+          -- format:
+          -- app name
+          -- shell command to be run
+          -- var1=val1
+          -- var2=val2
+          -- ...
+          --
+          -- size of tar file
+          -- tar file path
+          appname <- liftIO $ (S8.pack . trim) `fmap` hGetLine chandle
+          cmd <- liftIO $ (S8.pack . trim) `fmap` hGetLine chandle
+          envs <- liftIO $ readEnvs chandle  -- not supported by controller at the moment
+          filesize <- liftIO $ (read . trim) `fmap` hGetLine chandle
+          filename <- liftIO $ trim `fmap` hGetLine chandle
+          tarBS <- liftIO $ S.readFile filename  -- convert to bytestring
+          appId <- liftIO $ modifyMVar appMutex (\a -> return (a + 1, a))
+          let tarwriter dput = dput tarBS
+          let job = Job appId appname cmd filesize tarwriter
+          trace "deploying job" $ deployJob job
+      "add" -> do  -- add a new deployer
+          -- format:
+          -- hostname
+          --liftIO $ do
+          hostname <- liftIO $ trim `fmap` hGetLine chandle
+          dhandle <- liftIO $ connectTo hostname port  -- handle for the app deployer
+          deployer <- liftIO $ deployerFromHandle hostname dhandle
+          addDeployer deployer
+      "kill" -> do  -- kill an app
+          -- format:
+          -- app name
+          -- appId
+          appname <- liftIO $ trim `fmap` hGetLine chandle
+          appId <- liftIO $ (read . trim) `fmap` hGetLine chandle
+          eresponse <- killJob appId
+          liftIO $ case eresponse of
+            Right () -> do  -- success
+              hPutStrLn chandle "Done"
+            Left error -> hPutStrLn chandle error
+      "remove" -> do
+          -- remove an app from the ht (deployer will invoke this function when an app dies without the kill command)
+          -- format:
+          -- app name
+          -- appId
+          appname <- liftIO $ trim `fmap` hGetLine chandle
+          appId <- liftIO $ (read . trim) `fmap` hGetLine chandle
+          removeJob appId
+      _ -> do
+          liftIO $ hPutStrLn chandle $ "INVALID COMMAND: " ++ cmd
 
 
 -- Utils
@@ -155,4 +133,20 @@ readEnvHelper h envs = do
   case line of
     "" -> return envs
     env -> readEnvHelper h (envs ++ env)
+
+test = do
+  ht <- H.new
+  H.insert ht "key" "val"
+  fillTable "testht" ht 
+  list <- H.toList ht
+  trace (show list) $ return ()
+
+foreverOrEOF :: Handle -> Controller () -> Controller ()
+foreverOrEOF h act = do
+    eof <- liftIO $ hIsEOF h
+    if eof then
+      return ()
+      else do
+        act
+        foreverOrEOF h act
 

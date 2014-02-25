@@ -1,10 +1,9 @@
 # TODO
 
-## AppDeployer & AppController
+## Controller
 
-1. Remove global hashtables in both
-
-2. Assign apps an actual name other than the shell command
+1. Update the Nginx file when jobs are deployed/killed
+2. Back up hashtables to a file
 
 ## Nginx
 
