@@ -42,11 +42,13 @@ main = bracket (listenOn $ PortNumber 9876) sClose $ \s -> do
 handleConnection :: Handle -> MVar Int -> IO ()
 handleConnection h htMutex = foreverOrEOF2 h $ do
     cmd <- trim `fmap` hGetLine h
+    print cmd
     case cmd of
         "statuses" -> do  -- prints list of processes
             statusList <- atomic htMutex $ H.toList ht 
             hPutStrLn h (show $ map fst statusList)
         "launch" -> do  -- prints pid
+            putStrLn "launch called!"
             -- format:
             -- shell cmd
             -- identifier (as an int)
@@ -57,12 +59,16 @@ handleConnection h htMutex = foreverOrEOF2 h $ do
             -- num bytes
             -- tar data
             shellcmd <- trim `fmap` hGetLine h 
+            putStrLn $ "SHELL: " ++ (show shellcmd)
             identifier <- (read . trim) `fmap` hGetLine h 
+            putStrLn $ "ID: " ++ (show (identifier :: Int))
             envs <- readenvs h
             nbytes <- read `fmap` hGetLine h
+            print envs
             tarfile <- L.hGet h nbytes
             let entries = Tar.read tarfile
             Tar.unpack tmpDir entries
+            print "unpacked entries"
             void $ forkIO $ startApp htMutex shellcmd envs tmpDir identifier 0
         "kill" -> atomic htMutex $ do  -- OK or NOT FOUND
             -- format:
@@ -86,6 +92,7 @@ startApp :: MVar Int
             -> Int                -- Retries
             -> IO ()
 startApp htMutex command envs cwdpath identifier retries = when (retries < 5) $ do 
+    trace "startApp called" $ return ()
     output <- openFile (cwdpath </> "log.out") AppendMode
     err <- openFile (cwdpath </> "log.err") AppendMode
     input <- openFile "/dev/null" ReadMode

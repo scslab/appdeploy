@@ -57,7 +57,7 @@ handleConnection chandle appMutex depMutex = foreverOrEOF chandle $ do
           deployerht <- gets ctrlDeployers  -- ht of dId's and deployers
           liftIO $ do
             deployerList <- H.toList deployerht
-            mdeployers <- mapM (takeMVar . snd) deployerList  -- list of mvar deployers
+            mdeployers <- mapM (readMVar . snd) deployerList  -- list of mvar deployers
             hPutStrLn chandle $ show $ map deployerId mdeployers  -- TODO
       "deployer" -> do  -- show statuses of all apps of a deployer
           -- format:
@@ -88,7 +88,8 @@ handleConnection chandle appMutex depMutex = foreverOrEOF chandle $ do
           appId <- liftIO $ modifyMVar appMutex (\a -> return (a + 1, a))
           let tarwriter dput = dput tarBS
           let job = Job appId appname cmd filesize tarwriter
-          trace "deploying job" $ deployJob job
+          liftIO $ print (appId, appname, cmd, filesize)
+          deployJob job
       "add" -> do  -- add a new deployer
           -- format:
           -- hostname

@@ -66,24 +66,37 @@ removeDeployer did = do
     when (isJust md) $ withMVar (fromJust md) deployerClose  -- close the handle
 
 addDeployer :: Deployer -> Controller ()
-addDeployer deployer = do
+addDeployer deployer = trace "===addDeployer===" $ do
   deployers <- gets ctrlDeployers
   liftIO $ do
     mdeployer <- newMVar deployer
+    isEmpty <- isEmptyMVar mdeployer
+    print ("mvar empty? " ++ show isEmpty)
     H.insert deployers (deployerId deployer) mdeployer
+    list <- H.toList deployers
+    let mdeployer = snd $ list !! 0
+    isEmpty <- liftIO $ isEmptyMVar mdeployer
+    trace ("size of deployers ht: " ++ (show $ length list)) $ return ()
+    trace ("mdeployer empty? " ++ show isEmpty) $ return ()
 
 chooseDeployer :: Job -> Controller (MVar Deployer)
-chooseDeployer job = do
+chooseDeployer job = trace "===chooseDeployer===" $ do
   deployers <- liftIO . H.toList =<< gets ctrlDeployers
+  trace ("size of deployer ht: " ++ (show $ length deployers)) $ return ()
+  let mdeployer = snd $ deployers !! (jobId job `mod` (length deployers))
+  isEmpty <- liftIO $ isEmptyMVar mdeployer
+  trace ("mdeployer empty? " ++ show isEmpty) $ return ()
   return . snd $ deployers !! (jobId job `mod` (length deployers))
 
 withDeployer :: Maybe (Controller a) -> MVar Deployer -> (Deployer -> Controller a) -> Controller a
-withDeployer mretry mdeployer func = do
-  bracket (liftIO $ takeMVar mdeployer) (liftIO . putMVar mdeployer) $ \deployer ->
+withDeployer mretry mdeployer func = trace "===withdeployer===" $ do
+  bracket (liftIO $ takeMVar mdeployer) (liftIO . putMVar mdeployer) $ \deployer -> do
+    liftIO $ trace "about to get deployer out of mvar" $ return ()
     -- get the mdeployer out of its mvar, do the stuff below, and then put it back
     func deployer `catch`  -- what happens if the deployer is down or whatever
       (\(e :: IOException) -> do
           deployers <- gets ctrlDeployers
+          trace "got deployers" $ return ()
           liftIO $ H.delete deployers $ deployerId deployer
           case mretry of
             Nothing -> throwIO e
@@ -93,20 +106,27 @@ crlf :: S.ByteString
 crlf = "\r\n"
 
 deployJob :: Job -> Controller ()
-deployJob job = do
+deployJob job = trace "deployJob called" $ do
   md <- chooseDeployer job
+  liftIO $ isEmptyMVar md >>= print
+  liftIO $ trace "chose deployer" $ return ()
   withDeployer (Just $ deployJob job) md $ \deployer -> do  -- to retry, just run deployJob again
     liftIO $ do
+      trace "about to read tar file" $ return ()
       deployerPut deployer $
         "launch" <> crlf
           <> jobCommand job <> crlf
+          <> (S8.pack $ show $ jobId job) <> crlf
+          <> crlf
           <> (S8.pack . show $ jobTarballSize job) <> crlf
       jobTarballWriter job $ deployerPut deployer
+      trace "just read tar file" $ return ()
     jobs <- gets ctrlJobs
     liftIO $ do
       --addEntry nginxfile appname $ DeployInfo appId hostname portint
       --atomic appMutex $ addToFile appFile (show appId) hostname
       H.insert jobs (jobId job) md
+      trace "inserted job into ht" $ return ()
 
 killJob :: JobId -> Controller (Either String ())
 killJob jobId = do
