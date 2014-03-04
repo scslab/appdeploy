@@ -40,7 +40,7 @@ instance Table FilePath IO where
     let code = starttag ++ "\n" ++  -- new code to add to the config file
                "    server { \n\
                \        listen 8080; \n\
-               \        server_name  task.lvh.me; \n " ++  -- todo: change this to the actual url
+               \        server_name " ++ appname ++ ".lvh.me; \n " ++
                "        location / { \n\
                \           proxy_pass http://localhost:1234; \n\
                \        } \n\

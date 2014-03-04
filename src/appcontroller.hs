@@ -16,7 +16,6 @@ import Network
 import System.IO
 import System.IO.Unsafe
 import Deploy.Controller
-import NginxUpdater
 import Utils
 
 -- TODO: figure out what to do with these files now that the hashtables are gone
@@ -89,7 +88,8 @@ handleConnection chandle appMutex depMutex = foreverOrEOF chandle $ do
           let tarwriter dput = dput tarBS
           let job = Job appId appname cmd filesize tarwriter
           liftIO $ print (appId, appname, cmd, filesize)
-          deployJob job
+          msg <- deployJob job
+          liftIO $ hPutStrLn chandle msg
       "add" -> do  -- add a new deployer
           -- format:
           -- hostname
@@ -104,7 +104,7 @@ handleConnection chandle appMutex depMutex = foreverOrEOF chandle $ do
           -- appId
           appname <- liftIO $ trim `fmap` hGetLine chandle
           appId <- liftIO $ (read . trim) `fmap` hGetLine chandle
-          eresponse <- killJob appId
+          eresponse <- killJob appId appname
           liftIO $ case eresponse of
             Right () -> do  -- success
               hPutStrLn chandle "Done"
@@ -116,7 +116,7 @@ handleConnection chandle appMutex depMutex = foreverOrEOF chandle $ do
           -- appId
           appname <- liftIO $ trim `fmap` hGetLine chandle
           appId <- liftIO $ (read . trim) `fmap` hGetLine chandle
-          removeJob appId
+          removeJob appId appname
       _ -> do
           liftIO $ hPutStrLn chandle $ "INVALID COMMAND: " ++ cmd
 

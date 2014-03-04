@@ -16,6 +16,7 @@ import Data.Monoid
 import Control.Monad.Trans.State
 import Debug.Trace
 import System.IO
+import Network
 import NginxUpdater
 
 type JobId = Int
@@ -24,6 +25,9 @@ type DeployerId = String
 
 nginxfile :: String
 nginxfile = "nginx.conf"
+
+deployerPort :: Int
+deployerPort = 9876
 
 data Deployer = Deployer { deployerId :: DeployerId
                          , deployerPut :: S.ByteString -> IO ()
@@ -105,7 +109,7 @@ withDeployer mretry mdeployer func = trace "===withdeployer===" $ do
 crlf :: S.ByteString
 crlf = "\r\n"
 
-deployJob :: Job -> Controller ()
+deployJob :: Job -> Controller String
 deployJob job = trace "deployJob called" $ do
   md <- chooseDeployer job
   liftIO $ isEmptyMVar md >>= print
@@ -120,23 +124,24 @@ deployJob job = trace "deployJob called" $ do
           <> crlf
           <> (S8.pack . show $ jobTarballSize job) <> crlf
       jobTarballWriter job $ deployerPut deployer
+      let jobname = S8.unpack $ jobName job
+      addEntry nginxfile jobname $ DeployInfo (jobId job) (deployerId deployer) deployerPort
       trace "just read tar file" $ return ()
     jobs <- gets ctrlJobs
     liftIO $ do
-      --addEntry nginxfile appname $ DeployInfo appId hostname portint
       --atomic appMutex $ addToFile appFile (show appId) hostname
       H.insert jobs (jobId job) md
-      trace "inserted job into ht" $ return ()
+      trace "inserted job into ht" $ return ("Launched new job with ID: " ++ (show $ jobId job))
 
-killJob :: JobId -> Controller (Either String ())
-killJob jobId = do
+killJob :: JobId -> String -> Controller (Either String ())
+killJob jobId jobName = do
   jobs <- gets ctrlJobs  -- job id's + deployers
   md <- liftIO $ H.lookup jobs jobId  -- deployer
   case md of
     Nothing -> return . Left $ "No job found with id " ++ (show jobId)
     Just dmv -> withDeployer Nothing dmv $ \deployer -> liftIO $ do  -- dmv = deployer mvar
       H.delete jobs jobId
-      --removeEntry nginxfile appname $ DeployInfo jobId hostname portint
+      removeEntry nginxfile jobName $ DeployInfo jobId (deployerId deployer) deployerPort
       deployerPut deployer $ "kill" <> crlf <> (S8.pack $ show jobId) <> crlf
       ln <- deployerGetLine deployer
       if ln == "NOT FOUND" then
@@ -155,6 +160,15 @@ deployerStats did = do
         deployerPut deployer $ "statuses" <> crlf
         Right <$> deployerGetLine deployer
 
-removeJob :: JobId -> Controller ()
-removeJob jobId = gets ctrlJobs >>= \jobs -> liftIO $ H.delete jobs jobId
+removeJob :: JobId -> String -> Controller ()
+removeJob jobId jobName = do
+  jobs <- gets ctrlJobs  -- job id's + deployers
+  md <- liftIO $ H.lookup jobs jobId  -- deployer
+  case md of
+    Nothing -> return ()
+    Just dmv -> withDeployer Nothing dmv $ \deployer -> liftIO $ do  -- dmv = deployer mvar
+      H.delete jobs jobId
+      removeEntry nginxfile jobName $ DeployInfo jobId (deployerId deployer) deployerPort
+
+--removeJob jobId = gets ctrlJobs >>= \jobs -> liftIO $ H.delete jobs jobId
 
