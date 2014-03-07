@@ -64,7 +64,7 @@ handleConnection h htMutex = foreverOrEOF2 h $ do
             putStrLn $ "ID: " ++ (show (identifier :: Int))
             envs <- readenvs h
             nbytes <- read `fmap` hGetLine h
-            print envs
+            print ("envs: " ++ show envs)
             tarfile <- L.hGet h nbytes
             let entries = Tar.read tarfile
             Tar.unpack tmpDir entries

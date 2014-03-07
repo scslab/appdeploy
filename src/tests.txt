@@ -1,0 +1,20 @@
+
+Adding a deployer: yes
+Running an app: yes
+Running multiple apps: yes
+Running multiple apps w/ different tar files:
+Killing an app: yes
+Killing an app when multiple are running: yes
+App restarts when it dies: yes
+
+Update hashtable when app is added: yes
+Update hashtable when app is killed: yes
+*Update hashtable when app dies:
+Update nginx file when app is added: yes
+Update nginx file when app is killed: yes
+*Update nginx file when app dies:
+
+Running hails app: yes
+Running multiple hails apps: yes
+Running multiple hails apps on same port: doesn't break
+

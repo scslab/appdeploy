@@ -49,6 +49,7 @@ type DeployerStatus = Int
 data Job = Job { jobId :: JobId
                , jobName :: S.ByteString  -- the name of the app
                , jobCommand :: S.ByteString  -- the shell command to be run
+               , jobEnvs :: String  -- environment vars, separated by newlines. change to bytestring?
                , jobTarballSize :: Integer
                , jobTarballWriter :: (S.ByteString -> IO ()) -> IO ()  -- takes in deployerPut function and writes tarball to deployer
                }
@@ -121,6 +122,7 @@ deployJob job = trace "deployJob called" $ do
         "launch" <> crlf
           <> jobCommand job <> crlf
           <> (S8.pack $ show $ jobId job) <> crlf
+          <> (S8.pack $ jobEnvs job)
           <> crlf
           <> (S8.pack . show $ jobTarballSize job) <> crlf
       jobTarballWriter job $ deployerPut deployer

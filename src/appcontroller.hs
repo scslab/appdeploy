@@ -86,7 +86,7 @@ handleConnection chandle appMutex depMutex = foreverOrEOF chandle $ do
           tarBS <- liftIO $ S.readFile filename  -- convert to bytestring
           appId <- liftIO $ modifyMVar appMutex (\a -> return (a + 1, a))
           let tarwriter dput = dput tarBS
-          let job = Job appId appname cmd filesize tarwriter
+          let job = Job appId appname cmd envs filesize tarwriter
           liftIO $ print (appId, appname, cmd, filesize)
           msg <- deployJob job
           liftIO $ hPutStrLn chandle msg
@@ -133,7 +133,7 @@ readEnvHelper h envs = do
   line <- trim `fmap` hGetLine h
   case line of
     "" -> return envs
-    env -> readEnvHelper h (envs ++ env)
+    env -> readEnvHelper h (envs ++ env ++ "\n")
 
 test = do
   ht <- H.new
