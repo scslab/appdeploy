@@ -3,15 +3,10 @@
 module NginxUpdater where
 
 import Data.Maybe
-import Control.Monad.State
-import Control.Concurrent.MVar
 import Debug.Trace
-import qualified Data.HashTable.IO as H
 import Data.List
-import System.Environment   
 import System.Directory  
 import System.IO  
-import System.IO.Unsafe
 import System.Process
 import Text.Regex
 
@@ -109,8 +104,8 @@ instance Table FilePath IO where
                 let starttag = "# START: " ++ appname
                 if (isInfixOf starttag line) then do
                   let matches = matchRegex (mkRegex (appname ++ "([0-9]+)")) line
-                      identifier = read $ head $ fromJust matches
-                  getDeployInfo h identifier Nothing -- found the start tag; now get the deploy info
+                      appidentifier = read $ head $ fromJust matches
+                  getDeployInfo h appidentifier Nothing -- found start tag; now get deploy info
                   else lookuphelper app h
           getDeployInfo h identifier mhostname = do
             -- parse an app's config info to get its deploy info
@@ -129,9 +124,9 @@ instance Table FilePath IO where
                   in getDeployInfo h identifier $ Just hostname
                   else getDeployInfo h identifier Nothing
 
-
+restartNginx :: IO ()
 restartNginx = do
   let createProc = shell "nginx -s reload"
-  (_, _, _, handle) <- createProcess createProc
+  (_, _, _, _) <- createProcess createProc  -- the last underscore is a handle
   return ()
 

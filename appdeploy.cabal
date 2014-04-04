@@ -20,8 +20,14 @@ library
   build-depends:
       base < 6.0
     , bytestring
+    , directory
     , hashtables
     , monad-peel
+    , MissingH
+    , mtl
+    , network
+    , regex-compat
+    , process
     , transformers
   exposed-modules:
     Deploy.Controller
@@ -36,6 +42,7 @@ executable appdeployer
     , directory
     , filepath
     , hashtables
+    , MissingH
     , network
     , process
     , split
@@ -55,9 +62,12 @@ executable appcontroller
     , bytestring
     , directory
     , hashtables
+    , MissingH
     , network
+    , monad-peel
     , mtl
     , temporary
+    , transformers
     , process
     , regex-compat
     , split

@@ -1,20 +1,16 @@
 module Main where
 
-import Control.Applicative
 import Control.Concurrent
 import Control.Exception
 import Control.Monad
 import Control.Monad.IO.Class
 import Control.Monad.Trans.State
-import Data.Char
 import qualified Data.HashTable.IO as H
-import qualified Data.ByteString.Lazy as L
 import qualified Data.ByteString as S
 import qualified Data.ByteString.Char8 as S8
 import Debug.Trace
 import Network
 import System.IO
-import System.IO.Unsafe
 import Deploy.Controller
 import Utils
 
@@ -28,14 +24,13 @@ deployerFile = "deployerinfo.txt"
 main :: IO ()
 main = bracket (listenOn $ PortNumber 1234) sClose $ \s -> forever $ do
   appMutex <- newMVar 0  -- for appht
-  depMutex <- newMVar ()  -- for deployerht
   (h, _, _) <- accept s
   -- TODO: put info from files into the hashtables
   jobs <- H.new
   deployers <- H.new
-  let state = ControllerState jobs deployers
+  let cstate = ControllerState jobs deployers
   forkIO $ do
-    x <- execStateT (handleConnection h appMutex depMutex) state
+    _ <- execStateT (handleConnection h appMutex) cstate
     hClose h
   {-
   (forkIO $ do
@@ -45,10 +40,9 @@ main = bracket (listenOn $ PortNumber 1234) sClose $ \s -> forever $ do
   -}
   return ()
 
-handleConnection :: Handle -> MVar Int -> MVar () -> Controller ()
-handleConnection chandle appMutex depMutex = foreverOrEOF chandle $ do
-    let portint = 9876
-        portnum = 9876
+handleConnection :: Handle -> MVar Int -> Controller ()
+handleConnection chandle appMutex = foreverOrEOF chandle $ do
+    let portnum = 9876
         port = PortNumber portnum
     cmd <- liftIO $ trim `fmap` hGetLine chandle
     case cmd of
@@ -124,23 +118,24 @@ handleConnection chandle appMutex depMutex = foreverOrEOF chandle $ do
 -- Utils
 
 readEnvs :: Handle -> IO String
-readEnvs h = do
-  str <- readEnvHelper h ""
+readEnvs handle = do
+  str <- readEnvHelper handle ""
   trace ("envs to be printed: " ++ str ++ "end of envs") $ return ()
   return str
+  where readEnvHelper h envs = do
+          line <- trim `fmap` hGetLine h
+          case line of
+            "" -> return envs
+            env -> readEnvHelper h (envs ++ env ++ "\n")
 
-readEnvHelper h envs = do
-  line <- trim `fmap` hGetLine h
-  case line of
-    "" -> return envs
-    env -> readEnvHelper h (envs ++ env ++ "\n")
-
+{-
 test = do
   ht <- H.new
   H.insert ht "key" "val"
   fillTable "testht" ht 
   list <- H.toList ht
   trace (show list) $ return ()
+-}
 
 foreverOrEOF :: Handle -> Controller () -> Controller ()
 foreverOrEOF h act = do

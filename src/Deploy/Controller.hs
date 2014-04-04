@@ -16,7 +16,6 @@ import Data.Monoid
 import Control.Monad.Trans.State
 import Debug.Trace
 import System.IO
-import Network
 import NginxUpdater
 
 type JobId = Int
@@ -56,7 +55,7 @@ data Job = Job { jobId :: JobId
 
 data ControllerState = ControllerState
       { ctrlJobs :: H.BasicHashTable JobId (MVar Deployer)  -- job id's and their deployers
-      , ctrlDeployers :: H.BasicHashTable DeployerId (MVar Deployer) }  -- deployer id's and deployers
+      , ctrlDeployers :: H.BasicHashTable DeployerId (MVar Deployer) }  -- deployer ids and deployers
 
 type Controller = StateT ControllerState IO  -- stores a ControllerState along with every action
 
@@ -75,14 +74,14 @@ addDeployer deployer = trace "===addDeployer===" $ do
   deployers <- gets ctrlDeployers
   liftIO $ do
     mdeployer <- newMVar deployer
-    isEmpty <- isEmptyMVar mdeployer
-    print ("mvar empty? " ++ show isEmpty)
+    --isEmpty <- isEmptyMVar mdeployer
+    --print ("mvar empty? " ++ show isEmpty)
     H.insert deployers (deployerId deployer) mdeployer
-    list <- H.toList deployers
-    let mdeployer = snd $ list !! 0
-    isEmpty <- liftIO $ isEmptyMVar mdeployer
-    trace ("size of deployers ht: " ++ (show $ length list)) $ return ()
-    trace ("mdeployer empty? " ++ show isEmpty) $ return ()
+    --list <- H.toList deployers
+    --let mdeployer = snd $ list !! 0
+    --isEmpty <- liftIO $ isEmptyMVar mdeployer
+    --trace ("size of deployers ht: " ++ (show $ length list)) $ return ()
+    --trace ("mdeployer empty? " ++ show isEmpty) $ return ()
 
 chooseDeployer :: Job -> Controller (MVar Deployer)
 chooseDeployer job = trace "===chooseDeployer===" $ do

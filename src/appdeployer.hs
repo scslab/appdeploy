@@ -6,7 +6,6 @@ import System.FilePath
 import System.Directory
 import System.Process
 import Control.Concurrent
-import Data.Char
 import Data.List.Split
 import Debug.Trace
 import qualified Data.HashTable.IO as H
@@ -14,7 +13,6 @@ import qualified Data.ByteString.Lazy as L
 import Data.Time.Clock
 import qualified Codec.Archive.Tar as Tar
 import Network
-import System.IO.Temp
 import System.IO
 import System.IO.Unsafe
 import Utils
@@ -125,13 +123,14 @@ startApp htMutex command envs cwdpath identifier retries = when (retries < 5) $ 
 
 -- Utils
 
+removeFromController :: Show a => String -> a -> IO ()
 removeFromController appname identifier = do
   let hostname = "localhost"  -- hostname of the app controller
       port = PortNumber 1234  -- port of the app controller
-  handle <- connectTo hostname port  -- handle for the app controller
-  hPutStrLn handle "remove"
-  hPutStrLn handle appname
-  hPutStrLn handle $ show identifier
+  h <- connectTo hostname port  -- handle for the app controller
+  hPutStrLn h "remove"
+  hPutStrLn h appname
+  hPutStrLn h $ show identifier
 
 readenvs :: Handle -> IO [(String,String)]
 readenvs h = go h []

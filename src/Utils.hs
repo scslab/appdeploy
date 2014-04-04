@@ -5,7 +5,6 @@ import Control.Concurrent
 import Data.Char
 import Data.String.Utils
 import qualified Data.HashTable.IO as H
-import Network
 import System.IO
 
 -- add one hashtable entry to a file
