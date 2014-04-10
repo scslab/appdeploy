@@ -17,6 +17,7 @@ import Control.Monad.Trans.State
 import Debug.Trace
 import System.IO
 import NginxUpdater
+import Utils
 
 type JobId = Int
 
@@ -28,7 +29,13 @@ nginxfile = "nginx.conf"
 deployerPort :: Int
 deployerPort = 9876
 
-data Deployer = Deployer { deployerId :: DeployerId
+jobFile :: FilePath  -- backup of the ctrlJobs hashtable, with key/value pairs separated by commas
+jobFile = "jobinfo.txt"
+
+deployerFile :: FilePath  -- list of all the deployer id's
+deployerFile = "deployerinfo.txt"
+
+data Deployer = Deployer { deployerId :: DeployerId  -- aka hostname
                          , deployerPut :: S.ByteString -> IO ()
                          , deployerGet :: Int -> IO S.ByteString
                          , deployerGetLine :: IO S.ByteString
@@ -44,7 +51,6 @@ deployerFromHandle did handle = return $
 
 type DeployerStatus = Int
 
--- TODO: Add environment variables?
 data Job = Job { jobId :: JobId
                , jobName :: S.ByteString  -- the name of the app
                , jobCommand :: S.ByteString  -- the shell command to be run
@@ -53,35 +59,35 @@ data Job = Job { jobId :: JobId
                , jobTarballWriter :: (S.ByteString -> IO ()) -> IO ()  -- takes in deployerPut function and writes tarball to deployer
                }
 
+type JobHt = H.BasicHashTable JobId (MVar Deployer)  -- job id's and their deployers
+type DeployerHt = H.BasicHashTable DeployerId (MVar Deployer)  -- deployer ids and deployers
+
 data ControllerState = ControllerState
-      { ctrlJobs :: H.BasicHashTable JobId (MVar Deployer)  -- job id's and their deployers
-      , ctrlDeployers :: H.BasicHashTable DeployerId (MVar Deployer) }  -- deployer ids and deployers
+      { ctrlJobs :: JobHt
+      , ctrlDeployers :: DeployerHt }
 
 type Controller = StateT ControllerState IO  -- stores a ControllerState along with every action
 
-removeDeployer :: DeployerId -> Controller ()
-removeDeployer did = do
+removeDeployer :: DeployerId -> MVar () -> Controller ()
+removeDeployer did mutex = do
   deployers <- gets ctrlDeployers  -- ht of dId's and deployers
   liftIO $ do
     md <- stToIO $ do
             md <- HST.lookup deployers did  -- the mvar deployer
-            when (isJust md) $ HST.delete deployers did  -- if deployer exists, delete it from ht
+            when (isJust md) $ HST.delete deployers did  -- deployer exists, so delete it from ht
             return md
-    when (isJust md) $ withMVar (fromJust md) deployerClose  -- close the handle
+    when (isJust md) $ do
+      withMVar (fromJust md) deployerClose  -- close the handle
+      updateDeployerFile deployers deployerFile mutex  -- update the file backup
 
-addDeployer :: Deployer -> Controller ()
-addDeployer deployer = trace "===addDeployer===" $ do
+addDeployer :: Deployer -> MVar () -> Controller ()
+addDeployer deployer mutex = trace "===addDeployer===" $ do
   deployers <- gets ctrlDeployers
   liftIO $ do
     mdeployer <- newMVar deployer
-    --isEmpty <- isEmptyMVar mdeployer
-    --print ("mvar empty? " ++ show isEmpty)
     H.insert deployers (deployerId deployer) mdeployer
-    --list <- H.toList deployers
-    --let mdeployer = snd $ list !! 0
-    --isEmpty <- liftIO $ isEmptyMVar mdeployer
-    --trace ("size of deployers ht: " ++ (show $ length list)) $ return ()
-    --trace ("mdeployer empty? " ++ show isEmpty) $ return ()
+    trace "about to add deployer to file" $ return ()
+    addDeployerToFile deployerFile (deployerId deployer) mutex
 
 chooseDeployer :: Job -> Controller (MVar Deployer)
 chooseDeployer job = trace "===chooseDeployer===" $ do
@@ -109,12 +115,12 @@ withDeployer mretry mdeployer func = trace "===withdeployer===" $ do
 crlf :: S.ByteString
 crlf = "\r\n"
 
-deployJob :: Job -> Controller String
-deployJob job = trace "deployJob called" $ do
+deployJob :: Job -> MVar Int -> Controller String
+deployJob job mutex = trace "deployJob called" $ do
   md <- chooseDeployer job
   liftIO $ isEmptyMVar md >>= print
   liftIO $ trace "chose deployer" $ return ()
-  withDeployer (Just $ deployJob job) md $ \deployer -> do  -- to retry, just run deployJob again
+  withDeployer (Just $ deployJob job mutex) md $ \deployer -> do  -- to retry, just run deployJob again
     liftIO $ do
       trace "about to read tar file" $ return ()
       deployerPut deployer $
@@ -130,18 +136,19 @@ deployJob job = trace "deployJob called" $ do
       trace "just read tar file" $ return ()
     jobs <- gets ctrlJobs
     liftIO $ do
-      --atomic appMutex $ addToFile appFile (show appId) hostname
       H.insert jobs (jobId job) md
+      addJobToFile jobFile (jobId job) md mutex
       trace "inserted job into ht" $ return ("Launched new job with ID: " ++ (show $ jobId job))
 
-killJob :: JobId -> String -> Controller (Either String ())
-killJob jobId jobName = do
+killJob :: JobId -> String -> MVar Int -> Controller (Either String ())
+killJob jobId jobName mutex = do
   jobs <- gets ctrlJobs  -- job id's + deployers
   md <- liftIO $ H.lookup jobs jobId  -- deployer
   case md of
     Nothing -> return . Left $ "No job found with id " ++ (show jobId)
     Just dmv -> withDeployer Nothing dmv $ \deployer -> liftIO $ do  -- dmv = deployer mvar
       H.delete jobs jobId
+      updateJobFile jobs jobFile mutex
       removeEntry nginxfile jobName $ DeployInfo jobId (deployerId deployer) deployerPort
       deployerPut deployer $ "kill" <> crlf <> (S8.pack $ show jobId) <> crlf
       ln <- deployerGetLine deployer
@@ -161,8 +168,8 @@ deployerStats did = do
         deployerPut deployer $ "statuses" <> crlf
         Right <$> deployerGetLine deployer
 
-removeJob :: JobId -> String -> Controller ()
-removeJob jobId jobName = do
+removeJob :: JobId -> String -> MVar Int -> Controller ()
+removeJob jobId jobName mutex = do
   jobs <- gets ctrlJobs  -- job id's + deployers
   md <- liftIO $ H.lookup jobs jobId  -- deployer
   case md of
@@ -170,6 +177,44 @@ removeJob jobId jobName = do
     Just dmv -> withDeployer Nothing dmv $ \deployer -> liftIO $ do  -- dmv = deployer mvar
       H.delete jobs jobId
       removeEntry nginxfile jobName $ DeployInfo jobId (deployerId deployer) deployerPort
+      updateJobFile jobs jobFile mutex
 
---removeJob jobId = gets ctrlJobs >>= \jobs -> liftIO $ H.delete jobs jobId
+
+-- TODO: use mutexes on the files
+
+-- add a deployer id to the deployer backup file
+addDeployerToFile :: FilePath -> DeployerId -> MVar () -> IO ()
+addDeployerToFile filepath deployerId mutex = do
+  trace "opening file..." $ return ()
+  atomic mutex $ do
+    h <- openFile filepath AppendMode
+    hPutStrLn h deployerId
+    trace "closing file handle" $ hClose h
+
+-- replace the existing file with the contents of the hashtable
+updateDeployerFile :: DeployerHt -> FilePath -> MVar () -> IO ()
+updateDeployerFile ht filepath mutex = do
+  h <- atomic mutex $ openFile filepath WriteMode -- overwrite anything that's currently in the file
+  list <- H.toList ht
+  _ <- mapM (\pair -> atomic mutex $ hPutStrLn h $ fst pair) list
+  hClose h
+
+-- back up the jobId and its deployer's id to a file
+addJobToFile :: FilePath -> JobId -> MVar Deployer -> MVar Int -> IO ()
+addJobToFile filepath jobId mdeployer mutex = trace "adding job to file" $ do
+  deployer <- takeMVar mdeployer
+  atomic mutex $ do
+    h <- openFile filepath AppendMode
+    hPutStrLn h $ (show jobId) ++ "," ++ (deployerId deployer)
+    trace "closing file handle" $ hClose h
+
+updateJobFile :: H.BasicHashTable JobId (MVar Deployer) -> FilePath -> MVar Int -> IO ()
+updateJobFile ht filepath mutex = do
+  h <- atomic mutex $ openFile filepath WriteMode -- overwrite anything that's currently in the file
+  list <- H.toList ht
+  _ <- mapM (addToFile h) list
+  hClose h
+  where addToFile h (jobId, mdeployer) = do
+          deployer <- takeMVar mdeployer
+          atomic mutex $ hPutStrLn h (show jobId ++ deployerId deployer)
 

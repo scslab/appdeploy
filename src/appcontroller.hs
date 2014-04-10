@@ -8,42 +8,30 @@ import Control.Monad.Trans.State
 import qualified Data.HashTable.IO as H
 import qualified Data.ByteString as S
 import qualified Data.ByteString.Char8 as S8
+import Data.String.Utils
 import Debug.Trace
 import Network
 import System.IO
 import Deploy.Controller
 import Utils
 
--- TODO: figure out what to do with these files now that the hashtables are gone
-appFile :: FilePath  -- backup of appht, with key/value pairs separated by commas
-appFile = "appinfo.txt"
-
-deployerFile :: FilePath  -- backup of deployerht, with key/value pairs separated by commas
-deployerFile = "deployerinfo.txt"
+port = PortNumber 9876
 
 main :: IO ()
 main = bracket (listenOn $ PortNumber 1234) sClose $ \s -> forever $ do
-  appMutex <- newMVar 0  -- for appht
+  jobMutex <- newMVar 0  -- for job backup file
+  deployerMutex <- newMVar ()  -- for deployer backup file
   (h, _, _) <- accept s
-  -- TODO: put info from files into the hashtables
-  jobs <- H.new
-  deployers <- H.new
+  jobs <- fillJobsFromFile jobFile jobMutex
+  deployers <- fillDeployerFromFile deployerFile deployerMutex
   let cstate = ControllerState jobs deployers
   forkIO $ do
-    _ <- execStateT (handleConnection h appMutex) cstate
+    _ <- execStateT (handleConnection h jobMutex deployerMutex) cstate
     hClose h
-  {-
-  (forkIO $ do
-     x <- execStateT (handleConnection h appMutex depMutex) state
-     return ())
-     `finally` hClose h
-  -}
   return ()
 
-handleConnection :: Handle -> MVar Int -> Controller ()
-handleConnection chandle appMutex = foreverOrEOF chandle $ do
-    let portnum = 9876
-        port = PortNumber portnum
+handleConnection :: Handle -> MVar Int -> MVar () -> Controller ()
+handleConnection chandle jobMutex deployerMutex = foreverOrEOF chandle $ do
     cmd <- liftIO $ trim `fmap` hGetLine chandle
     case cmd of
       "statuses" -> do  -- show statuses of all app deployers in the hashtable
@@ -78,11 +66,11 @@ handleConnection chandle appMutex = foreverOrEOF chandle $ do
           filesize <- liftIO $ (read . trim) `fmap` hGetLine chandle
           filename <- liftIO $ trim `fmap` hGetLine chandle
           tarBS <- liftIO $ S.readFile filename  -- convert to bytestring
-          appId <- liftIO $ modifyMVar appMutex (\a -> return (a + 1, a))
+          appId <- liftIO $ modifyMVar jobMutex (\a -> return (a + 1, a))
           let tarwriter dput = dput tarBS
           let job = Job appId appname cmd envs filesize tarwriter
           liftIO $ print (appId, appname, cmd, filesize)
-          msg <- deployJob job
+          msg <- deployJob job jobMutex
           liftIO $ hPutStrLn chandle msg
       "add" -> do  -- add a new deployer
           -- format:
@@ -90,15 +78,15 @@ handleConnection chandle appMutex = foreverOrEOF chandle $ do
           --liftIO $ do
           hostname <- liftIO $ trim `fmap` hGetLine chandle
           dhandle <- liftIO $ connectTo hostname port  -- handle for the app deployer
-          deployer <- liftIO $ deployerFromHandle hostname dhandle
-          addDeployer deployer
+          deployer <- liftIO $ deployerFromHandle hostname dhandle  -- deployer id = hostname
+          addDeployer deployer deployerMutex
       "kill" -> do  -- kill an app
           -- format:
           -- app name
           -- appId
           appname <- liftIO $ trim `fmap` hGetLine chandle
           appId <- liftIO $ (read . trim) `fmap` hGetLine chandle
-          eresponse <- killJob appId appname
+          eresponse <- killJob appId appname jobMutex
           liftIO $ case eresponse of
             Right () -> do  -- success
               hPutStrLn chandle "Done"
@@ -110,7 +98,7 @@ handleConnection chandle appMutex = foreverOrEOF chandle $ do
           -- appId
           appname <- liftIO $ trim `fmap` hGetLine chandle
           appId <- liftIO $ (read . trim) `fmap` hGetLine chandle
-          removeJob appId appname
+          removeJob appId appname jobMutex
       _ -> do
           liftIO $ hPutStrLn chandle $ "INVALID COMMAND: " ++ cmd
 
@@ -128,15 +116,6 @@ readEnvs handle = do
             "" -> return envs
             env -> readEnvHelper h (envs ++ env ++ "\n")
 
-{-
-test = do
-  ht <- H.new
-  H.insert ht "key" "val"
-  fillTable "testht" ht 
-  list <- H.toList ht
-  trace (show list) $ return ()
--}
-
 foreverOrEOF :: Handle -> Controller () -> Controller ()
 foreverOrEOF h act = do
     eof <- liftIO $ hIsEOF h
@@ -146,3 +125,31 @@ foreverOrEOF h act = do
         act
         foreverOrEOF h act
 
+-- return a hashtable with deployerId's and deployers from the backup file
+fillDeployerFromFile :: FilePath -> MVar () -> IO DeployerHt
+fillDeployerFromFile filepath mutex = do
+  h <- atomic mutex $ openFile filepath ReadWriteMode
+  ht <- H.new
+  foreverOrEOF2 h $ do
+    hostname <- atomic mutex $ trim `fmap` hGetLine h
+    dhandle <- connectTo hostname port
+    deployer <- deployerFromHandle hostname dhandle
+    mdeployer <- newMVar deployer
+    H.insert ht hostname mdeployer  -- hostname = deployer id
+  hClose h
+  return ht
+
+-- return a hashtable with jobId's and deployers from the backup file
+fillJobsFromFile :: FilePath -> MVar Int -> IO JobHt
+fillJobsFromFile filepath mutex = do
+  h <- atomic mutex $ openFile filepath ReadWriteMode
+  ht <- H.new
+  foreverOrEOF2 h $ do
+    entry <- atomic mutex $ trim `fmap` hGetLine h
+    let [jobId, hostname] = split "," entry  -- hostname = deployer id
+    dhandle <- connectTo hostname port
+    deployer <- deployerFromHandle hostname dhandle
+    mdeployer <- newMVar deployer
+    H.insert ht (read jobId) mdeployer  -- hostname = deployer id
+  hClose h
+  return ht

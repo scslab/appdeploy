@@ -5,13 +5,8 @@ import Control.Concurrent
 import Data.Char
 import Data.String.Utils
 import qualified Data.HashTable.IO as H
+import System.Directory
 import System.IO
-
--- add one hashtable entry to a file
-addToFile :: FilePath -> String -> String -> IO ()
-addToFile filepath key value = do  -- NOTE: key must not contain commas
-  h <- openFile filepath AppendMode
-  hPutStrLn h (key ++ "," ++ value)
 
 -- retrieve all entries from a file and add them to a hashtable
 fillTable :: FilePath -> H.BasicHashTable String String -> IO ()
@@ -21,7 +16,7 @@ fillTable filepath ht = do
     entry <- hGetLine h
     let [key,val] = split "," entry
     H.insert ht key val
-    
+
 foreverOrEOF2 :: Handle -> IO () -> IO ()
 foreverOrEOF2 h act = do
     eof <- hIsEOF h
