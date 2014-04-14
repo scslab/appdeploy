@@ -87,7 +87,8 @@ addDeployer deployer mutex = trace "===addDeployer===" $ do
     mdeployer <- newMVar deployer
     H.insert deployers (deployerId deployer) mdeployer
     trace "about to add deployer to file" $ return ()
-    addDeployerToFile deployerFile (deployerId deployer) mutex
+    updateDeployerFile deployers deployerFile mutex
+    --addDeployerToFile deployerFile (deployerId deployer) mutex
 
 chooseDeployer :: Job -> Controller (MVar Deployer)
 chooseDeployer job = trace "===chooseDeployer===" $ do
@@ -137,7 +138,7 @@ deployJob job mutex = trace "deployJob called" $ do
     jobs <- gets ctrlJobs
     liftIO $ do
       H.insert jobs (jobId job) md
-      addJobToFile jobFile (jobId job) md mutex
+      addJobToFile jobFile (jobId job) deployer mutex
       trace "inserted job into ht" $ return ("Launched new job with ID: " ++ (show $ jobId job))
 
 killJob :: JobId -> String -> MVar Int -> Controller (Either String ())
@@ -182,15 +183,6 @@ removeJob jobId jobName mutex = do
 
 -- TODO: use mutexes on the files
 
--- add a deployer id to the deployer backup file
-addDeployerToFile :: FilePath -> DeployerId -> MVar () -> IO ()
-addDeployerToFile filepath deployerId mutex = do
-  trace "opening file..." $ return ()
-  atomic mutex $ do
-    h <- openFile filepath AppendMode
-    hPutStrLn h deployerId
-    trace "closing file handle" $ hClose h
-
 -- replace the existing file with the contents of the hashtable
 updateDeployerFile :: DeployerHt -> FilePath -> MVar () -> IO ()
 updateDeployerFile ht filepath mutex = do
@@ -200,13 +192,13 @@ updateDeployerFile ht filepath mutex = do
   hClose h
 
 -- back up the jobId and its deployer's id to a file
-addJobToFile :: FilePath -> JobId -> MVar Deployer -> MVar Int -> IO ()
-addJobToFile filepath jobId mdeployer mutex = trace "adding job to file" $ do
-  deployer <- takeMVar mdeployer
-  atomic mutex $ do
-    h <- openFile filepath AppendMode
-    hPutStrLn h $ (show jobId) ++ "," ++ (deployerId deployer)
-    trace "closing file handle" $ hClose h
+addJobToFile :: FilePath -> JobId -> Deployer -> MVar Int -> IO ()
+addJobToFile filepath jobId deployer mutex = trace "adding job to file" $ do
+  trace "removed deployer from mvar" $ return ()
+  h <- openFile filepath AppendMode
+  trace "opened file" $ return ()
+  hPutStrLn h $ (show jobId) ++ "," ++ (deployerId deployer)
+  trace "closing file handle" $ hClose h
 
 updateJobFile :: H.BasicHashTable JobId (MVar Deployer) -> FilePath -> MVar Int -> IO ()
 updateJobFile ht filepath mutex = do
