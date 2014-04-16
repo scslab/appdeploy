@@ -93,8 +93,9 @@ addDeployer deployer mutex = trace "===addDeployer===" $ do
 chooseDeployer :: Job -> Controller (MVar Deployer)
 chooseDeployer job = trace "===chooseDeployer===" $ do
   deployers <- liftIO . H.toList =<< gets ctrlDeployers
-  trace ("size of deployer ht: " ++ (show $ length deployers)) $ return ()
+  trace ("number of deployers in ht: " ++ (show $ length deployers)) $ return ()
   let mdeployer = snd $ deployers !! (jobId job `mod` (length deployers))
+  --let mdeployer = snd $ deployers !! (jobId job `mod` (length deployers))
   isEmpty <- liftIO $ isEmptyMVar mdeployer
   trace ("mdeployer empty? " ++ show isEmpty) $ return ()
   return . snd $ deployers !! (jobId job `mod` (length deployers))
@@ -106,11 +107,11 @@ withDeployer mretry mdeployer func = trace "===withdeployer===" $ do
     -- get the mdeployer out of its mvar, do the stuff below, and then put it back
     func deployer `catch`  -- what happens if the deployer is down or whatever
       (\(e :: IOException) -> do
+          trace ("withDeployer threw exception: " ++ show e) $ return ()
           deployers <- gets ctrlDeployers
-          trace "got deployers" $ return ()
           liftIO $ H.delete deployers $ deployerId deployer
           case mretry of
-            Nothing -> throwIO e
+            Nothing -> liftIO $ trace "throwing exception" $ throwIO e
             Just retry -> retry)
 
 crlf :: S.ByteString
@@ -143,19 +144,24 @@ deployJob job mutex = trace "deployJob called" $ do
 
 killJob :: JobId -> String -> MVar Int -> Controller (Either String ())
 killJob jobId jobName mutex = do
+  liftIO $ trace "===killJob===" $ return ()
   jobs <- gets ctrlJobs  -- job id's + deployers
   md <- liftIO $ H.lookup jobs jobId  -- deployer
   case md of
     Nothing -> return . Left $ "No job found with id " ++ (show jobId)
-    Just dmv -> withDeployer Nothing dmv $ \deployer -> liftIO $ do  -- dmv = deployer mvar
-      H.delete jobs jobId
-      updateJobFile jobs jobFile mutex
-      removeEntry nginxfile jobName $ DeployInfo jobId (deployerId deployer) deployerPort
-      deployerPut deployer $ "kill" <> crlf <> (S8.pack $ show jobId) <> crlf
-      ln <- deployerGetLine deployer
-      if ln == "NOT FOUND" then
-        return . Left $ "Job " ++ (show jobId) ++ " not found on deployer"
-        else return $ Right ()
+    Just dmv -> do
+      liftIO $ do
+        H.delete jobs jobId
+        updateJobFile jobs jobFile mutex
+        trace "killJob: updated job file" $ return ()
+      withDeployer Nothing dmv $ \deployer -> liftIO $ do  -- dmv = deployer mvar
+        trace "killJob: found job" $ return ()
+        removeEntry nginxfile jobName $ DeployInfo jobId (deployerId deployer) deployerPort
+        deployerPut deployer $ "kill" <> crlf <> (S8.pack $ show jobId) <> crlf
+        ln <- deployerGetLine deployer
+        if ln == "NOT FOUND" then
+          return . Left $ "Job " ++ (show jobId) ++ " not found on deployer"
+          else return $ Right ()
 
 deployerStats :: DeployerId -> Controller (Either String S.ByteString)
 deployerStats did = do
@@ -202,11 +208,17 @@ addJobToFile filepath jobId deployer mutex = trace "adding job to file" $ do
 
 updateJobFile :: H.BasicHashTable JobId (MVar Deployer) -> FilePath -> MVar Int -> IO ()
 updateJobFile ht filepath mutex = do
+  trace "===updateJobFile===" $ return ()
   h <- atomic mutex $ openFile filepath WriteMode -- overwrite anything that's currently in the file
+  trace "opened file" $ return ()
   list <- H.toList ht
+  trace ("number of jobs now running: " ++ (show $ length list)) $ return ()
   _ <- mapM (addToFile h) list
+  trace "addToFile finished" $ return ()
   hClose h
   where addToFile h (jobId, mdeployer) = do
-          deployer <- takeMVar mdeployer
-          atomic mutex $ hPutStrLn h (show jobId ++ deployerId deployer)
+          trace "===addToFile===" $ return ()
+          deployer <- readMVar mdeployer
+          trace "addToFile: took deployer from mvar" $ return ()
+          atomic mutex $ hPutStrLn h (show jobId ++ "," ++ deployerId deployer)
 

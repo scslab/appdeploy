@@ -82,8 +82,8 @@ instance Table FilePath IO where
             eof <- hIsEOF oldh
             if eof then return () else do
               line <- hGetLine oldh
-              trace ("line: " ++ line) $ return ()
-              trace ("copymode: " ++ show copymode) $ return ()
+              --trace ("line: " ++ line) $ return ()
+              --trace ("copymode: " ++ show copymode) $ return ()
               if (isInfixOf starttag line || isInfixOf endtag line) then
                 processFile oldh newh starttag endtag $ not copymode
                 else do

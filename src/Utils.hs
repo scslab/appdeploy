@@ -8,15 +8,6 @@ import qualified Data.HashTable.IO as H
 import System.Directory
 import System.IO
 
--- retrieve all entries from a file and add them to a hashtable
-fillTable :: FilePath -> H.BasicHashTable String String -> IO ()
-fillTable filepath ht = do
-  h <- openFile filepath ReadWriteMode
-  foreverOrEOF2 h $ do
-    entry <- hGetLine h
-    let [key,val] = split "," entry
-    H.insert ht key val
-
 foreverOrEOF2 :: Handle -> IO () -> IO ()
 foreverOrEOF2 h act = do
     eof <- hIsEOF h

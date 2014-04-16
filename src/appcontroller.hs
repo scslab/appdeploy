@@ -24,6 +24,7 @@ main = bracket (listenOn $ PortNumber 1234) sClose $ \s -> forever $ do
   (h, _, _) <- accept s
   jobs <- fillJobsFromFile jobFile jobMutex
   deployers <- fillDeployerFromFile deployerFile deployerMutex
+  --putMVar jobMutex 1
   let cstate = ControllerState jobs deployers
   forkIO $ do
     _ <- execStateT (handleConnection h jobMutex deployerMutex) cstate
@@ -151,5 +152,11 @@ fillJobsFromFile filepath mutex = do
     deployer <- deployerFromHandle hostname dhandle
     mdeployer <- newMVar deployer
     H.insert ht (read jobId) mdeployer  -- hostname = deployer id
+    eof <- hIsEOF h
+    if eof then do
+      takeMVar mutex
+      putMVar mutex (read jobId + 1)
+      else return ()
   hClose h
   return ht
+
