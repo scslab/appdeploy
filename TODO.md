@@ -2,12 +2,12 @@
 
 ## Controller
 
-1. Update the Nginx file when jobs are deployed/killed
-2. Back up hashtables to a file
+1. Remove deployer when deployer dies
 
 ## Nginx
 
-1. Load balancing (http://wiki.nginx.org/LoadBalanceExample)
+1. Sometimes, when you kill a job, it says "nginx.conf.backup: openFile: resource busy (file is locked)"
+2. Load balancing (http://wiki.nginx.org/LoadBalanceExample)
 
 ## Misc.
 

@@ -27,9 +27,12 @@ class Monad m => Table d m where
 instance Table FilePath IO where
 
   addEntry filepath appname deployinfo = do
+    trace "===nginx: addEntry===" $ return ()
     oldh <- openFile filepath ReadWriteMode  -- handle to current config file
+    trace "addEntry: opened current file" $ return ()
     let tmppath = filepath ++ ".new"  -- temporary; will be copied back to filepath at the end
     newh <- openFile tmppath ReadWriteMode  -- handle to modified config file
+    trace "addEntry: opened tmp file" $ return ()
     let starttag = "# START: " ++ appname ++ (show $ identifier deployinfo)
         endtag = "# END: " ++ appname ++ (show $ identifier deployinfo)
     let code = starttag ++ "\n" ++  -- new code to add to the config file
@@ -42,6 +45,8 @@ instance Table FilePath IO where
                \    } \n"
                ++ endtag
     insertAt "http {" code oldh newh
+    hClose newh
+    hClose oldh
     renameFile filepath (filepath ++ ".backup")
     renameFile tmppath filepath
     restartNginx
@@ -51,7 +56,6 @@ instance Table FilePath IO where
               hPutStrLn newh "http {"
               hPutStrLn newh newtext
               hPutStrLn newh "}"
-              hClose newh
               return ()
               else do
                 line <- hGetLine oldh

@@ -117,12 +117,12 @@ withDeployer mretry mdeployer func = trace "===withdeployer===" $ do
 crlf :: S.ByteString
 crlf = "\r\n"
 
-deployJob :: Job -> MVar Int -> Controller String
-deployJob job mutex = trace "deployJob called" $ do
+deployJob :: Job -> MVar Int -> MVar () -> Controller String
+deployJob job jobMutex nginxMutex = trace "***deployJob called***" $ do
   md <- chooseDeployer job
   liftIO $ isEmptyMVar md >>= print
   liftIO $ trace "chose deployer" $ return ()
-  withDeployer (Just $ deployJob job mutex) md $ \deployer -> do  -- to retry, just run deployJob again
+  withDeployer (Just $ deployJob job jobMutex nginxMutex) md $ \deployer -> do  -- to retry, just run deployJob again
     liftIO $ do
       trace "about to read tar file" $ return ()
       deployerPut deployer $
@@ -134,33 +134,35 @@ deployJob job mutex = trace "deployJob called" $ do
           <> (S8.pack . show $ jobTarballSize job) <> crlf
       jobTarballWriter job $ deployerPut deployer
       let jobname = S8.unpack $ jobName job
-      addEntry nginxfile jobname $ DeployInfo (jobId job) (deployerId deployer) deployerPort
+      atomic nginxMutex $
+        addEntry nginxfile jobname $ DeployInfo (jobId job) (deployerId deployer) deployerPort
       trace "just read tar file" $ return ()
     jobs <- gets ctrlJobs
     liftIO $ do
       H.insert jobs (jobId job) md
-      addJobToFile jobFile (jobId job) deployer mutex
+      addJobToFile jobFile (jobId job) deployer jobMutex
       trace "inserted job into ht" $ return ("Launched new job with ID: " ++ (show $ jobId job))
 
-killJob :: JobId -> String -> MVar Int -> Controller (Either String ())
-killJob jobId jobName mutex = do
+killJob :: JobId -> String -> MVar Int -> MVar () -> Controller (Either String ())
+killJob jid jobname jobMutex nginxMutex = do
   liftIO $ trace "===killJob===" $ return ()
   jobs <- gets ctrlJobs  -- job id's + deployers
-  md <- liftIO $ H.lookup jobs jobId  -- deployer
+  md <- liftIO $ H.lookup jobs jid  -- deployer
   case md of
-    Nothing -> return . Left $ "No job found with id " ++ (show jobId)
+    Nothing -> return . Left $ "No job found with id " ++ (show jid)
     Just dmv -> do
       liftIO $ do
-        H.delete jobs jobId
-        updateJobFile jobs jobFile mutex
+        H.delete jobs jid
+        updateJobFile jobs jobFile jobMutex
         trace "killJob: updated job file" $ return ()
       withDeployer Nothing dmv $ \deployer -> liftIO $ do  -- dmv = deployer mvar
         trace "killJob: found job" $ return ()
-        removeEntry nginxfile jobName $ DeployInfo jobId (deployerId deployer) deployerPort
-        deployerPut deployer $ "kill" <> crlf <> (S8.pack $ show jobId) <> crlf
+        atomic nginxMutex $
+          removeEntry nginxfile jobname $ DeployInfo jid (deployerId deployer) deployerPort
+        deployerPut deployer $ "kill" <> crlf <> (S8.pack $ show jid) <> crlf
         ln <- deployerGetLine deployer
         if ln == "NOT FOUND" then
-          return . Left $ "Job " ++ (show jobId) ++ " not found on deployer"
+          return . Left $ "Job " ++ (show jid) ++ " not found on deployer"
           else return $ Right ()
 
 deployerStats :: DeployerId -> Controller (Either String S.ByteString)
@@ -175,16 +177,17 @@ deployerStats did = do
         deployerPut deployer $ "statuses" <> crlf
         Right <$> deployerGetLine deployer
 
-removeJob :: JobId -> String -> MVar Int -> Controller ()
-removeJob jobId jobName mutex = do
+removeJob :: JobId -> String -> MVar Int -> MVar () -> Controller ()
+removeJob jobId jobName jobMutex nginxMutex = do
   jobs <- gets ctrlJobs  -- job id's + deployers
   md <- liftIO $ H.lookup jobs jobId  -- deployer
   case md of
     Nothing -> return ()
     Just dmv -> withDeployer Nothing dmv $ \deployer -> liftIO $ do  -- dmv = deployer mvar
       H.delete jobs jobId
-      removeEntry nginxfile jobName $ DeployInfo jobId (deployerId deployer) deployerPort
-      updateJobFile jobs jobFile mutex
+      atomic nginxMutex $
+        removeEntry nginxfile jobName $ DeployInfo jobId (deployerId deployer) deployerPort
+      updateJobFile jobs jobFile jobMutex
 
 
 -- TODO: use mutexes on the files
@@ -201,7 +204,7 @@ updateDeployerFile ht filepath mutex = do
 addJobToFile :: FilePath -> JobId -> Deployer -> MVar Int -> IO ()
 addJobToFile filepath jobId deployer mutex = trace "adding job to file" $ do
   trace "removed deployer from mvar" $ return ()
-  h <- openFile filepath AppendMode
+  h <- atomic mutex $ openFile filepath AppendMode
   trace "opened file" $ return ()
   hPutStrLn h $ (show jobId) ++ "," ++ (deployerId deployer)
   trace "closing file handle" $ hClose h

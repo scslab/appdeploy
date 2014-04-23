@@ -15,24 +15,26 @@ import System.IO
 import Deploy.Controller
 import Utils
 
+port :: PortID
 port = PortNumber 9876
 
 main :: IO ()
 main = bracket (listenOn $ PortNumber 1234) sClose $ \s -> forever $ do
   jobMutex <- newMVar 0  -- for job backup file
   deployerMutex <- newMVar ()  -- for deployer backup file
+  nginxMutex <- newMVar ()  -- for nginx config file
   (h, _, _) <- accept s
   jobs <- fillJobsFromFile jobFile jobMutex
   deployers <- fillDeployerFromFile deployerFile deployerMutex
   --putMVar jobMutex 1
   let cstate = ControllerState jobs deployers
   forkIO $ do
-    _ <- execStateT (handleConnection h jobMutex deployerMutex) cstate
+    _ <- execStateT (handleConnection h jobMutex deployerMutex nginxMutex) cstate
     hClose h
   return ()
 
-handleConnection :: Handle -> MVar Int -> MVar () -> Controller ()
-handleConnection chandle jobMutex deployerMutex = foreverOrEOF chandle $ do
+handleConnection :: Handle -> MVar Int -> MVar () -> MVar () -> Controller ()
+handleConnection chandle jobMutex deployerMutex nginxMutex = foreverOrEOF chandle $ do
     cmd <- liftIO $ trim `fmap` hGetLine chandle
     case cmd of
       "statuses" -> do  -- show statuses of all app deployers in the hashtable
@@ -71,7 +73,7 @@ handleConnection chandle jobMutex deployerMutex = foreverOrEOF chandle $ do
           let tarwriter dput = dput tarBS
           let job = Job appId appname cmd envs filesize tarwriter
           liftIO $ print (appId, appname, cmd, filesize)
-          msg <- deployJob job jobMutex
+          msg <- deployJob job jobMutex nginxMutex
           liftIO $ hPutStrLn chandle msg
       "add" -> do  -- add a new deployer
           -- format:
@@ -87,7 +89,7 @@ handleConnection chandle jobMutex deployerMutex = foreverOrEOF chandle $ do
           -- appId
           appname <- liftIO $ trim `fmap` hGetLine chandle
           appId <- liftIO $ (read . trim) `fmap` hGetLine chandle
-          eresponse <- killJob appId appname jobMutex
+          eresponse <- killJob appId appname jobMutex nginxMutex
           liftIO $ case eresponse of
             Right () -> do  -- success
               hPutStrLn chandle "Done"
@@ -99,7 +101,7 @@ handleConnection chandle jobMutex deployerMutex = foreverOrEOF chandle $ do
           -- appId
           appname <- liftIO $ trim `fmap` hGetLine chandle
           appId <- liftIO $ (read . trim) `fmap` hGetLine chandle
-          removeJob appId appname jobMutex
+          removeJob appId appname jobMutex nginxMutex
       _ -> do
           liftIO $ hPutStrLn chandle $ "INVALID COMMAND: " ++ cmd
 

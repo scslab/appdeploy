@@ -3,9 +3,7 @@ module Utils where
 
 import Control.Concurrent
 import Data.Char
-import Data.String.Utils
-import qualified Data.HashTable.IO as H
-import System.Directory
+--import Data.String.Utils
 import System.IO
 
 foreverOrEOF2 :: Handle -> IO () -> IO ()
