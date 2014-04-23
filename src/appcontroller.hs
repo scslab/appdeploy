@@ -29,6 +29,13 @@ main = bracket (listenOn $ PortNumber 1234) sClose $ \s -> forever $ do
   --putMVar jobMutex 1
   let cstate = ControllerState jobs deployers
   forkIO $ do
+    -- Iterate through deployers
+    -- For each deployer:
+    --  send some sort of message (job status?)
+    --  if responds successfully, cool
+    --  otherwise, it's dead, need to relocate jobs that were assigned to it.
+    return ()
+  forkIO $ do
     _ <- execStateT (handleConnection h jobMutex deployerMutex nginxMutex) cstate
     hClose h
   return ()
