@@ -9,6 +9,7 @@ import Control.Monad.ST.Safe
 import Control.Exception.Peel
 import qualified Data.ByteString as S
 import qualified Data.ByteString.Char8 as S8
+import Data.Hashable
 import qualified Data.HashTable.IO as H
 import qualified Data.HashTable.ST.Basic as HST
 import Data.Maybe
@@ -54,12 +55,20 @@ type DeployerStatus = Int
 data Job = Job { jobId :: JobId
                , jobName :: S.ByteString  -- the name of the app
                , jobCommand :: S.ByteString  -- the shell command to be run
-               , jobEnvs :: String  -- environment vars, separated by newlines. change to bytestring?
+               , jobEnvs :: String  -- environment vars, separated by newlines
                , jobTarballSize :: Integer
+               , jobTarballName :: String
                , jobTarballWriter :: (S.ByteString -> IO ()) -> IO ()  -- takes in deployerPut function and writes tarball to deployer
                }
 
-type JobHt = H.BasicHashTable JobId (MVar Deployer)  -- job id's and their deployers
+instance Hashable Job where
+  hashWithSalt s job = hashWithSalt s $ jobId job
+
+instance Eq Job where
+  a == b = (jobId a) == (jobId b)
+
+
+type JobHt = H.BasicHashTable Job (MVar Deployer)  -- job id's and their deployers
 type DeployerHt = H.BasicHashTable DeployerId (MVar Deployer)  -- deployer ids and deployers
 
 data ControllerState = ControllerState
@@ -139,20 +148,22 @@ deployJob job jobMutex nginxMutex = trace "***deployJob called***" $ do
       trace "just read tar file" $ return ()
     jobs <- gets ctrlJobs
     liftIO $ do
-      H.insert jobs (jobId job) md
-      addJobToFile jobFile (jobId job) deployer jobMutex
+      H.insert jobs job md
+      addJobToFile jobFile job deployer jobMutex
       trace "inserted job into ht" $ return ("Launched new job with ID: " ++ (show $ jobId job))
 
 killJob :: JobId -> String -> MVar Int -> MVar () -> Controller (Either String ())
 killJob jid jobname jobMutex nginxMutex = do
   liftIO $ trace "===killJob===" $ return ()
   jobs <- gets ctrlJobs  -- job id's + deployers
-  md <- liftIO $ H.lookup jobs jid  -- deployer
+  md <- liftIO $ lookupById jobs jid  -- TODO: look up by id
   case md of
     Nothing -> return . Left $ "No job found with id " ++ (show jid)
     Just dmv -> do
       liftIO $ do
-        H.delete jobs jid
+        trace "killJob: about to delete job from ht" $ return ()
+        atomic jobMutex $ deleteById jobs jid jobMutex
+        trace "killJob: just deleted job from ht" $ return ()
         updateJobFile jobs jobFile jobMutex
         trace "killJob: updated job file" $ return ()
       withDeployer Nothing dmv $ \deployer -> liftIO $ do  -- dmv = deployer mvar
@@ -180,11 +191,11 @@ deployerStats did = do
 removeJob :: JobId -> String -> MVar Int -> MVar () -> Controller ()
 removeJob jobId jobName jobMutex nginxMutex = do
   jobs <- gets ctrlJobs  -- job id's + deployers
-  md <- liftIO $ H.lookup jobs jobId  -- deployer
+  md <- liftIO $ lookupById jobs jobId  -- deployer
   case md of
     Nothing -> return ()
     Just dmv -> withDeployer Nothing dmv $ \deployer -> liftIO $ do  -- dmv = deployer mvar
-      H.delete jobs jobId
+      atomic jobMutex $ deleteById jobs jobId jobMutex
       atomic nginxMutex $
         removeEntry nginxfile jobName $ DeployInfo jobId (deployerId deployer) deployerPort
       updateJobFile jobs jobFile jobMutex
@@ -201,15 +212,15 @@ updateDeployerFile ht filepath mutex = do
   hClose h
 
 -- back up the jobId and its deployer's id to a file
-addJobToFile :: FilePath -> JobId -> Deployer -> MVar Int -> IO ()
-addJobToFile filepath jobId deployer mutex = trace "adding job to file" $ do
+addJobToFile :: FilePath -> Job -> Deployer -> MVar Int -> IO ()
+addJobToFile filepath job deployer mutex = trace "adding job to file" $ do
   trace "removed deployer from mvar" $ return ()
   h <- atomic mutex $ openFile filepath AppendMode
   trace "opened file" $ return ()
-  hPutStrLn h $ (show jobId) ++ "," ++ (deployerId deployer)
+  hPutStrLn h (showJob job ++ "," ++ deployerId deployer)
   trace "closing file handle" $ hClose h
 
-updateJobFile :: H.BasicHashTable JobId (MVar Deployer) -> FilePath -> MVar Int -> IO ()
+updateJobFile :: JobHt -> FilePath -> MVar Int -> IO ()
 updateJobFile ht filepath mutex = do
   trace "===updateJobFile===" $ return ()
   h <- atomic mutex $ openFile filepath WriteMode -- overwrite anything that's currently in the file
@@ -219,9 +230,32 @@ updateJobFile ht filepath mutex = do
   _ <- mapM (addToFile h) list
   trace "addToFile finished" $ return ()
   hClose h
-  where addToFile h (jobId, mdeployer) = do
+  where addToFile h (job, mdeployer) = do
           trace "===addToFile===" $ return ()
           deployer <- readMVar mdeployer
           trace "addToFile: took deployer from mvar" $ return ()
-          atomic mutex $ hPutStrLn h (show jobId ++ "," ++ deployerId deployer)
+          hPutStrLn h (showJob job ++ "," ++ deployerId deployer)
+
+showJob job = (show $ jobId job) ++ "," ++ (S8.unpack $ jobName job) ++ "," ++
+              (S8.unpack $ jobCommand job) ++ "," ++ (show $ jobTarballSize job) ++ "," ++
+              jobTarballName job
+        --TODO: figure out how to add env variables into the file or find a way around it
+
+lookupById :: JobHt -> JobId -> IO (Maybe (MVar Deployer))
+lookupById ht jid = do
+  list <- H.toList ht
+  let matches = filter (\(job, md) -> jobId job == jid) list
+  case matches of
+    [] -> return Nothing
+    justmd -> return $ Just $ snd $ head matches
+
+deleteById :: JobHt -> JobId -> MVar Int -> IO ()
+deleteById ht jid mutex = do
+  list <- H.toList ht
+  print "deleteById: converted ht to list"
+  let matches = filter (\(job, md) -> jobId job == jid) list
+  print ("deleteById: found matches: " ++ (show $ length matches))
+  flip mapM_ matches $ \(job, md) -> H.delete ht job
+  print "deleteById: finished"
+  return ()
 

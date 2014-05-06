@@ -26,14 +26,16 @@ main = bracket (listenOn $ PortNumber 1234) sClose $ \s -> forever $ do
   (h, _, _) <- accept s
   jobs <- fillJobsFromFile jobFile jobMutex
   deployers <- fillDeployerFromFile deployerFile deployerMutex
-  --putMVar jobMutex 1
   let cstate = ControllerState jobs deployers
-  forkIO $ do
-    -- Iterate through deployers
-    -- For each deployer:
-    --  send some sort of message (job status?)
-    --  if responds successfully, cool
-    --  otherwise, it's dead, need to relocate jobs that were assigned to it.
+  forkIO $ flip evalStateT cstate $ do
+    deployerht <- gets ctrlDeployers
+    jobht <- gets ctrlJobs  -- TODO: use mutex for ctrlJobs?
+    liftIO $ atomic deployerMutex $ flip H.mapM_ deployerht $ \pair -> do
+      alive <- checkDeployer deployerht jobht jobMutex nginxMutex pair
+      if alive then return ()  -- deployer is fine
+        else atomic jobMutex $ flip H.mapM_ jobht $ \(job, mdep) -> --deployer's dead; re-deploy jobs
+               if mdep == (snd pair) then evalStateT (deployJob job jobMutex nginxMutex) cstate
+                 else return ""
     return ()
   forkIO $ do
     _ <- execStateT (handleConnection h jobMutex deployerMutex nginxMutex) cstate
@@ -49,7 +51,7 @@ handleConnection chandle jobMutex deployerMutex nginxMutex = foreverOrEOF chandl
           liftIO $ do
             deployerList <- H.toList deployerht
             mdeployers <- mapM (readMVar . snd) deployerList  -- list of mvar deployers
-            hPutStrLn chandle $ show $ map deployerId mdeployers  -- TODO
+            hPutStrLn chandle $ show $ map deployerId mdeployers
       "deployer" -> do  -- show statuses of all apps of a deployer
           -- format:
           -- hostname
@@ -74,11 +76,13 @@ handleConnection chandle jobMutex deployerMutex nginxMutex = foreverOrEOF chandl
           cmd <- liftIO $ (S8.pack . trim) `fmap` hGetLine chandle
           envs <- liftIO $ readEnvs chandle  -- not supported by controller at the moment
           filesize <- liftIO $ (read . trim) `fmap` hGetLine chandle
+          liftIO $ print ("about to get filename")
           filename <- liftIO $ trim `fmap` hGetLine chandle
-          tarBS <- liftIO $ S.readFile filename  -- convert to bytestring
+          liftIO $ print ("about to read file: " ++ filename)
+          tarBS <- liftIO $ S.readFile filename -- convert to bytestring
           appId <- liftIO $ modifyMVar jobMutex (\a -> return (a + 1, a))
           let tarwriter dput = dput tarBS
-          let job = Job appId appname cmd envs filesize tarwriter
+          let job = Job appId appname cmd envs filesize filename tarwriter
           liftIO $ print (appId, appname, cmd, filesize)
           msg <- deployJob job jobMutex nginxMutex
           liftIO $ hPutStrLn chandle msg
@@ -156,16 +160,38 @@ fillJobsFromFile filepath mutex = do
   ht <- H.new
   foreverOrEOF2 h $ do
     entry <- atomic mutex $ trim `fmap` hGetLine h
-    let [jobId, hostname] = split "," entry  -- hostname = deployer id
+    let [jid, appname, cmd, tarsize, tarfile, hostname] = split "," entry
+    liftIO $ print ("about to read file: " ++ tarfile)
+    tarBS <- S.readFile tarfile  -- convert to bytestring
+    let tarwriter dput = dput tarBS
+    let envs = ""  -- TODO: figure out env vars
+    let job = Job (read jid) (S8.pack appname) (S8.pack cmd) envs (read tarsize) tarfile tarwriter
     dhandle <- connectTo hostname port
     deployer <- deployerFromHandle hostname dhandle
     mdeployer <- newMVar deployer
-    H.insert ht (read jobId) mdeployer  -- hostname = deployer id
+    H.insert ht job mdeployer  -- hostname = deployer id
     eof <- hIsEOF h
     if eof then do
       takeMVar mutex
-      putMVar mutex (read jobId + 1)
+      putMVar mutex (read jid + 1)
       else return ()
   hClose h
   return ht
+
+--type JobHt = H.BasicHashTable JobId (MVar Deployer)  -- job id's and their deployers
+--type DeployerHt = H.BasicHashTable DeployerId (MVar Deployer)  -- deployer ids and deployers
+
+    --  send some sort of message (job status?)
+    --  if responds successfully, cool
+    --  otherwise, it's dead, need to relocate jobs that were assigned to it.
+-- Checks to see if a deployer is alive
+checkDeployer :: DeployerHt -> JobHt -> MVar Int -> MVar () -> (DeployerId, MVar Deployer) -> IO Bool
+checkDeployer deployerht jobht jobMutex nginxMutex (did, mdeployer) = do
+  result <- try $ connectTo did port
+  case (result  :: Either IOException Handle) of
+    Left _ -> do
+      print ("Deployer " ++ did ++ " is down")
+      H.delete deployerht did  -- this will probably cause concurrency issues
+      return False
+    Right handle -> return True
 
