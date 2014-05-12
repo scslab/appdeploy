@@ -117,6 +117,7 @@ withDeployer mretry mdeployer func = trace "===withdeployer===" $ do
     func deployer `catch`  -- what happens if the deployer is down or whatever
       (\(e :: IOException) -> do
           trace ("withDeployer threw exception: " ++ show e) $ return ()
+          trace ("withDeployer threw an exception") $ return ()
           deployers <- gets ctrlDeployers
           liftIO $ H.delete deployers $ deployerId deployer
           case mretry of
@@ -190,6 +191,7 @@ deployerStats did = do
 
 removeJob :: JobId -> String -> MVar Int -> MVar () -> Controller ()
 removeJob jobId jobName jobMutex nginxMutex = do
+  trace "removeJob called" $ return ()
   jobs <- gets ctrlJobs  -- job id's + deployers
   md <- liftIO $ lookupById jobs jobId  -- deployer
   case md of
@@ -217,7 +219,7 @@ addJobToFile filepath job deployer mutex = trace "adding job to file" $ do
   trace "removed deployer from mvar" $ return ()
   h <- atomic mutex $ openFile filepath AppendMode
   trace "opened file" $ return ()
-  hPutStrLn h (showJob job ++ "," ++ deployerId deployer)
+  hPutStrLn h (stringify job deployer)
   trace "closing file handle" $ hClose h
 
 updateJobFile :: JobHt -> FilePath -> MVar Int -> IO ()
@@ -234,12 +236,13 @@ updateJobFile ht filepath mutex = do
           trace "===addToFile===" $ return ()
           deployer <- readMVar mdeployer
           trace "addToFile: took deployer from mvar" $ return ()
-          hPutStrLn h (showJob job ++ "," ++ deployerId deployer)
+          hPutStrLn h (stringify job deployer)
 
-showJob job = (show $ jobId job) ++ "," ++ (S8.unpack $ jobName job) ++ "," ++
-              (S8.unpack $ jobCommand job) ++ "," ++ (show $ jobTarballSize job) ++ "," ++
-              jobTarballName job
-        --TODO: figure out how to add env variables into the file or find a way around it
+stringify job deployer =
+  (show $ jobId job) ++ "," ++ (S8.unpack $ jobName job) ++ "," ++
+  (S8.unpack $ jobCommand job) ++ "," ++ (show $ jobTarballSize job) ++ "," ++
+  jobTarballName job ++ "," ++ deployerId deployer ++ "\n" ++ jobEnvs job
+  -- env vars are separated by newlines
 
 lookupById :: JobHt -> JobId -> IO (Maybe (MVar Deployer))
 lookupById ht jid = do

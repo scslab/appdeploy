@@ -74,7 +74,7 @@ handleConnection chandle jobMutex deployerMutex nginxMutex = foreverOrEOF chandl
           -- tar file path
           appname <- liftIO $ (S8.pack . trim) `fmap` hGetLine chandle
           cmd <- liftIO $ (S8.pack . trim) `fmap` hGetLine chandle
-          envs <- liftIO $ readEnvs chandle  -- not supported by controller at the moment
+          envs <- liftIO $ readEnvs chandle
           filesize <- liftIO $ (read . trim) `fmap` hGetLine chandle
           liftIO $ print ("about to get filename")
           filename <- liftIO $ trim `fmap` hGetLine chandle
@@ -110,6 +110,7 @@ handleConnection chandle jobMutex deployerMutex nginxMutex = foreverOrEOF chandl
           -- format:
           -- app name
           -- appId
+          liftIO $ print "appcontroller: remove called"
           appname <- liftIO $ trim `fmap` hGetLine chandle
           appId <- liftIO $ (read . trim) `fmap` hGetLine chandle
           removeJob appId appname jobMutex nginxMutex
@@ -118,17 +119,6 @@ handleConnection chandle jobMutex deployerMutex nginxMutex = foreverOrEOF chandl
 
 
 -- Utils
-
-readEnvs :: Handle -> IO String
-readEnvs handle = do
-  str <- readEnvHelper handle ""
-  trace ("envs to be printed: " ++ str ++ "end of envs") $ return ()
-  return str
-  where readEnvHelper h envs = do
-          line <- trim `fmap` hGetLine h
-          case line of
-            "" -> return envs
-            env -> readEnvHelper h (envs ++ env ++ "\n")
 
 foreverOrEOF :: Handle -> Controller () -> Controller ()
 foreverOrEOF h act = do
@@ -161,10 +151,10 @@ fillJobsFromFile filepath mutex = do
   foreverOrEOF2 h $ do
     entry <- atomic mutex $ trim `fmap` hGetLine h
     let [jid, appname, cmd, tarsize, tarfile, hostname] = split "," entry
+    envs <- readEnvs h
     liftIO $ print ("about to read file: " ++ tarfile)
     tarBS <- S.readFile tarfile  -- convert to bytestring
     let tarwriter dput = dput tarBS
-    let envs = ""  -- TODO: figure out env vars
     let job = Job (read jid) (S8.pack appname) (S8.pack cmd) envs (read tarsize) tarfile tarwriter
     dhandle <- connectTo hostname port
     deployer <- deployerFromHandle hostname dhandle
@@ -194,4 +184,15 @@ checkDeployer deployerht jobht jobMutex nginxMutex (did, mdeployer) = do
       H.delete deployerht did  -- this will probably cause concurrency issues
       return False
     Right handle -> return True
+
+readEnvs :: Handle -> IO String
+readEnvs handle = do
+  str <- readEnvHelper handle ""
+  trace ("envs to be printed: " ++ str ++ "end of envs") $ return ()
+  return str
+  where readEnvHelper h envs = do
+          line <- trim `fmap` hGetLine h
+          case line of
+            "" -> return envs
+            env -> readEnvHelper h (envs ++ env ++ "\n")
 

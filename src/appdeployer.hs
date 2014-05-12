@@ -125,12 +125,22 @@ startApp htMutex command envs cwdpath identifier retries = when (retries < 5) $ 
 
 removeFromController :: Show a => String -> a -> IO ()
 removeFromController appname identifier = do
+  trace ("removeFromController called for: " ++ appname) $ return ()
   let hostname = "localhost"  -- hostname of the app controller
       port = PortNumber 1234  -- port of the app controller
   h <- connectTo hostname port  -- handle for the app controller
   hPutStrLn h "remove"
   hPutStrLn h appname
   hPutStrLn h $ show identifier
+
+{- this used to be part of the "launch" command:
+            createDirectory tmpDir
+            tmppath <- createTempDirectory tmpDir "appdeploy"
+            Tar.unpack tmppath entries
+            void $ forkIO $ startApp htMutex shellcmd envs tmppath identifier 0
+            oldId <- modifyMVar htMutex (\a -> return (a + 1, a))
+            void $ forkIO $ startApp htMutex shellcmd env tmppath oldId 0
+-}
 
 readenvs :: Handle -> IO [(String,String)]
 readenvs h = go h []
@@ -145,13 +155,4 @@ parseEnv :: String -> (String, String)
 parseEnv envString =
   let (key:value:[]) = splitOn "=" envString
   in (key, value)
-
-{- this used to be part of the "launch" command:
-            createDirectory tmpDir
-            tmppath <- createTempDirectory tmpDir "appdeploy"
-            Tar.unpack tmppath entries
-            void $ forkIO $ startApp htMutex shellcmd envs tmppath identifier 0
-            oldId <- modifyMVar htMutex (\a -> return (a + 1, a))
-            void $ forkIO $ startApp htMutex shellcmd env tmppath oldId 0
--}
 

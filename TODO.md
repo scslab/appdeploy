@@ -2,7 +2,8 @@
 
 ## Controller
 
-1. Remove deployer when deployer dies
+1. Change deployer port number to be inputted by user
+2. Test what happens when a deployer dies & make sure apps are re-deployed properly
 
 ## Nginx
 
