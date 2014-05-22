@@ -15,8 +15,6 @@ import System.IO
 import Deploy.Controller
 import Utils
 
-port :: PortID
-port = PortNumber 9876
 
 main :: IO ()
 main = bracket (listenOn $ PortNumber 1234) sClose $ \s -> forever $ do
@@ -29,13 +27,11 @@ main = bracket (listenOn $ PortNumber 1234) sClose $ \s -> forever $ do
   let cstate = ControllerState jobs deployers
   forkIO $ flip evalStateT cstate $ do
     deployerht <- gets ctrlDeployers
-    jobht <- gets ctrlJobs  -- TODO: use mutex for ctrlJobs?
-    liftIO $ atomic deployerMutex $ flip H.mapM_ deployerht $ \pair -> do
+    jobht <- gets ctrlJobs
+    liftIO $ atomic deployerMutex $ flip H.mapM_ deployerht $ \pair -> do -- pair = (did, mdep)
       alive <- checkDeployer deployerht jobht jobMutex nginxMutex pair
       if alive then return ()  -- deployer is fine
-        else atomic jobMutex $ flip H.mapM_ jobht $ \(job, mdep) -> --deployer's dead; re-deploy jobs
-               if mdep == (snd pair) then evalStateT (deployJob job jobMutex nginxMutex) cstate
-                 else return ""
+      else evalStateT (removeDeployer (fst pair) deployerMutex jobMutex nginxMutex) cstate
     return ()
   forkIO $ do
     _ <- execStateT (handleConnection h jobMutex deployerMutex nginxMutex) cstate
@@ -55,9 +51,11 @@ handleConnection chandle jobMutex deployerMutex nginxMutex = foreverOrEOF chandl
       "deployer" -> do  -- show statuses of all apps of a deployer
           -- format:
           -- hostname
+          -- port num
           hostname <- liftIO $ trim `fmap` hGetLine chandle 
           liftIO $ trace (show hostname) $ return ()
-          estats <- deployerStats hostname
+          deployerPort <- liftIO $ (read . trim) `fmap` hGetLine chandle
+          estats <- deployerStats (hostname, deployerPort)
           liftIO $ trace (show estats) $ return ()
           liftIO $ case estats of
             Left msg -> hPutStrLn chandle msg
@@ -89,10 +87,12 @@ handleConnection chandle jobMutex deployerMutex nginxMutex = foreverOrEOF chandl
       "add" -> do  -- add a new deployer
           -- format:
           -- hostname
+          -- deployer's port number
           --liftIO $ do
           hostname <- liftIO $ trim `fmap` hGetLine chandle
-          dhandle <- liftIO $ connectTo hostname port  -- handle for the app deployer
-          deployer <- liftIO $ deployerFromHandle hostname dhandle  -- deployer id = hostname
+          dPort <- liftIO $ trim `fmap` hGetLine chandle
+          dhandle <- liftIO $ connectTo hostname $ toPortId dPort -- handle for the app deployer
+          deployer <- liftIO $ deployerFromHandle (hostname, read dPort) dhandle
           addDeployer deployer deployerMutex
       "kill" -> do  -- kill an app
           -- format:
@@ -135,11 +135,13 @@ fillDeployerFromFile filepath mutex = do
   h <- atomic mutex $ openFile filepath ReadWriteMode
   ht <- H.new
   foreverOrEOF2 h $ do
-    hostname <- atomic mutex $ trim `fmap` hGetLine h
-    dhandle <- connectTo hostname port
-    deployer <- deployerFromHandle hostname dhandle
+    idStr <- trim `fmap` hGetLine h
+    let [hostname, dport] = split "," idStr
+        did = (hostname, read dport)
+    dhandle <- connectTo hostname $ toPortId dport
+    deployer <- deployerFromHandle did dhandle
     mdeployer <- newMVar deployer
-    H.insert ht hostname mdeployer  -- hostname = deployer id
+    atomic mutex $ H.insert ht did mdeployer  -- hostname = deployer id
   hClose h
   return ht
 
@@ -150,14 +152,14 @@ fillJobsFromFile filepath mutex = do
   ht <- H.new
   foreverOrEOF2 h $ do
     entry <- atomic mutex $ trim `fmap` hGetLine h
-    let [jid, appname, cmd, tarsize, tarfile, hostname] = split "," entry
+    let [jid, appname, cmd, tarsize, tarfile, hostname, deployerPort] = split "," entry
     envs <- readEnvs h
     liftIO $ print ("about to read file: " ++ tarfile)
     tarBS <- S.readFile tarfile  -- convert to bytestring
     let tarwriter dput = dput tarBS
     let job = Job (read jid) (S8.pack appname) (S8.pack cmd) envs (read tarsize) tarfile tarwriter
-    dhandle <- connectTo hostname port
-    deployer <- deployerFromHandle hostname dhandle
+    dhandle <- connectTo hostname $ toPortId deployerPort
+    deployer <- deployerFromHandle (hostname, read deployerPort) dhandle
     mdeployer <- newMVar deployer
     H.insert ht job mdeployer  -- hostname = deployer id
     eof <- hIsEOF h
@@ -177,11 +179,10 @@ fillJobsFromFile filepath mutex = do
 -- Checks to see if a deployer is alive
 checkDeployer :: DeployerHt -> JobHt -> MVar Int -> MVar () -> (DeployerId, MVar Deployer) -> IO Bool
 checkDeployer deployerht jobht jobMutex nginxMutex (did, mdeployer) = do
-  result <- try $ connectTo did port
+  result <- try $ connectTo (fst did) (PortNumber $ toEnum $ snd did)
   case (result  :: Either IOException Handle) of
     Left _ -> do
-      print ("Deployer " ++ did ++ " is down")
-      H.delete deployerht did  -- this will probably cause concurrency issues
+      print ("Deployer " ++ show did ++ " is down")
       return False
     Right handle -> return True
 
@@ -196,3 +197,4 @@ readEnvs handle = do
             "" -> return envs
             env -> readEnvHelper h (envs ++ env ++ "\n")
 
+toPortId str = PortNumber $ toEnum $ read str

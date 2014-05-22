@@ -13,6 +13,7 @@ import qualified Data.ByteString.Lazy as L
 import Data.Time.Clock
 import qualified Codec.Archive.Tar as Tar
 import Network
+import System.Environment
 import System.IO
 import System.IO.Unsafe
 import Utils
@@ -26,16 +27,19 @@ tmpDir :: FilePath
 tmpDir = "tmp"
 
 main :: IO ()
-main = bracket (listenOn $ PortNumber 9876) sClose $ \s -> do
-  exists <- doesDirectoryExist tmpDir
-  when exists $ removeDirectoryRecursive tmpDir
-  createDirectory tmpDir
+main = do
+  portstr <- head `fmap` getArgs
+  let port = PortNumber $ toEnum $ read portstr
+  bracket (listenOn port) sClose $ \s -> do
+    exists <- doesDirectoryExist tmpDir
+    when exists $ removeDirectoryRecursive tmpDir
+    createDirectory tmpDir
 
-  htMutex <- newMVar 0
-  forever $ do
-    (h, _, _) <- accept s
-    forkIO $ handleConnection h htMutex
-               `finally` hClose h
+    htMutex <- newMVar 0
+    forever $ do
+      (h, _, _) <- accept s
+      forkIO $ handleConnection h htMutex
+                 `finally` hClose h
 
 handleConnection :: Handle -> MVar Int -> IO ()
 handleConnection h htMutex = foreverOrEOF2 h $ do
