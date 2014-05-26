@@ -76,18 +76,24 @@ type Controller = StateT ControllerState IO  -- stores a ControllerState along w
 
 removeDeployer :: DeployerId -> MVar () -> MVar Int -> MVar () -> Controller ()
 removeDeployer did depMutex jobMutex nginxMutex = do
+  liftIO $ print ("===removeDeployer=== called for: " ++ show did)
   deployers <- gets ctrlDeployers
   jobht <- gets ctrlJobs
-  md <- liftIO $ atomic depMutex $ stToIO $ do
+  liftIO $ print "just got ht's"
+  md <- liftIO $ stToIO $ do
+          trace "here" $ return ()
           md <- HST.lookup deployers did  -- the mvar deployer
-          when (isJust md) $ HST.delete deployers did  -- deployer exists, so delete it from ht
+          when (isJust md) $ trace "removing from ht" $ HST.delete deployers did  -- deployer exists, so delete it from ht
           return md
+  liftIO $ print ("isJust md? " ++ (show $ isJust md))
   when (isJust md) $ do
     joblist <- liftIO $ H.toList jobht
+    liftIO $ print "about to redeploy jobs"
     flip mapM joblist $ \(job, mdep) ->  -- re-deploy jobs
       if mdep == (fromJust md) then deployJob job jobMutex nginxMutex
       else return ""
     liftIO $ do
+      print "updating deployer file"
       updateDeployerFile deployers deployerFile depMutex  -- update the file backup
       withMVar (fromJust md) deployerClose  -- close the handle
     return ()
@@ -161,7 +167,7 @@ killJob :: JobId -> String -> MVar Int -> MVar () -> Controller (Either String (
 killJob jid jobname jobMutex nginxMutex = do
   liftIO $ trace "===killJob===" $ return ()
   jobs <- gets ctrlJobs  -- job id's + deployers
-  md <- liftIO $ lookupById jobs jid  -- TODO: look up by id
+  md <- liftIO $ lookupById jobs jid
   case md of
     Nothing -> return . Left $ "No job found with id " ++ (show jid)
     Just dmv -> do
@@ -208,9 +214,6 @@ removeJob jobId jobName jobMutex nginxMutex = do
         removeEntry nginxfile jobName $ DeployInfo jobId dhost dport
       updateJobFile jobs jobFile jobMutex
 
-
--- TODO: use mutexes on the files
-
 -- replace the existing file with the contents of the hashtable
 updateDeployerFile :: DeployerHt -> FilePath -> MVar () -> IO ()
 updateDeployerFile ht filepath mutex = do
@@ -227,7 +230,7 @@ addJobToFile filepath job deployer mutex = trace "adding job to file" $ do
   trace "removed deployer from mvar" $ return ()
   h <- atomic mutex $ openFile filepath AppendMode
   trace "opened file" $ return ()
-  hPutStrLn h (stringify job deployer)
+  atomic mutex $ hPutStrLn h (stringify job deployer)
   trace "closing file handle" $ hClose h
 
 updateJobFile :: JobHt -> FilePath -> MVar Int -> IO ()

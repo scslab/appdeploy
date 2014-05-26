@@ -25,11 +25,12 @@ main = bracket (listenOn $ PortNumber 1234) sClose $ \s -> forever $ do
   jobs <- fillJobsFromFile jobFile jobMutex
   deployers <- fillDeployerFromFile deployerFile deployerMutex
   let cstate = ControllerState jobs deployers
-  forkIO $ flip evalStateT cstate $ do
+  forkIO $ flip evalStateT cstate $ forever $ do  -- thread to monitor deployers
     deployerht <- gets ctrlDeployers
     jobht <- gets ctrlJobs
     liftIO $ atomic deployerMutex $ flip H.mapM_ deployerht $ \pair -> do -- pair = (did, mdep)
       alive <- checkDeployer deployerht jobht jobMutex nginxMutex pair
+      --if alive then trace ("deployer " ++ (show $ fst pair) ++ " alive") $ return ()  -- deployer is fine
       if alive then return ()  -- deployer is fine
       else evalStateT (removeDeployer (fst pair) deployerMutex jobMutex nginxMutex) cstate
     return ()
