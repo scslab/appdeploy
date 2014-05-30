@@ -9,7 +9,6 @@ import qualified Data.HashTable.IO as H
 import qualified Data.ByteString as S
 import qualified Data.ByteString.Char8 as S8
 import Data.String.Utils
-import Debug.Trace
 import Network
 import System.IO
 import Deploy.Controller
@@ -30,7 +29,6 @@ main = bracket (listenOn $ PortNumber 1234) sClose $ \s -> forever $ do
     jobht <- gets ctrlJobs
     liftIO $ atomic deployerMutex $ flip H.mapM_ deployerht $ \pair -> do -- pair = (did, mdep)
       alive <- checkDeployer deployerht jobht jobMutex nginxMutex pair
-      --if alive then trace ("deployer " ++ (show $ fst pair) ++ " alive") $ return ()  -- deployer is fine
       if alive then return ()  -- deployer is fine
       else evalStateT (removeDeployer (fst pair) deployerMutex jobMutex nginxMutex) cstate
     return ()
@@ -54,10 +52,8 @@ handleConnection chandle jobMutex deployerMutex nginxMutex = foreverOrEOF chandl
           -- hostname
           -- port num
           hostname <- liftIO $ trim `fmap` hGetLine chandle 
-          liftIO $ trace (show hostname) $ return ()
           deployerPort <- liftIO $ (read . trim) `fmap` hGetLine chandle
           estats <- deployerStats (hostname, deployerPort)
-          liftIO $ trace (show estats) $ return ()
           liftIO $ case estats of
             Left msg -> hPutStrLn chandle msg
             Right msg -> hPutStrLn chandle $ S8.unpack msg
@@ -75,14 +71,11 @@ handleConnection chandle jobMutex deployerMutex nginxMutex = foreverOrEOF chandl
           cmd <- liftIO $ (S8.pack . trim) `fmap` hGetLine chandle
           envs <- liftIO $ readEnvs chandle
           filesize <- liftIO $ (read . trim) `fmap` hGetLine chandle
-          liftIO $ print ("about to get filename")
           filename <- liftIO $ trim `fmap` hGetLine chandle
-          liftIO $ print ("about to read file: " ++ filename)
           tarBS <- liftIO $ S.readFile filename -- convert to bytestring
           appId <- liftIO $ modifyMVar jobMutex (\a -> return (a + 1, a))
           let tarwriter dput = dput tarBS
           let job = Job appId appname cmd envs filesize filename tarwriter
-          liftIO $ print (appId, appname, cmd, filesize)
           msg <- deployJob job jobMutex nginxMutex
           liftIO $ hPutStrLn chandle msg
       "add" -> do  -- add a new deployer
@@ -111,7 +104,6 @@ handleConnection chandle jobMutex deployerMutex nginxMutex = foreverOrEOF chandl
           -- format:
           -- app name
           -- appId
-          liftIO $ print "appcontroller: remove called"
           appname <- liftIO $ trim `fmap` hGetLine chandle
           appId <- liftIO $ (read . trim) `fmap` hGetLine chandle
           removeJob appId appname jobMutex nginxMutex
@@ -155,7 +147,6 @@ fillJobsFromFile filepath mutex = do
     entry <- atomic mutex $ trim `fmap` hGetLine h
     let [jid, appname, cmd, tarsize, tarfile, hostname, deployerPort] = split "," entry
     envs <- readEnvs h
-    liftIO $ print ("about to read file: " ++ tarfile)
     tarBS <- S.readFile tarfile  -- convert to bytestring
     let tarwriter dput = dput tarBS
     let job = Job (read jid) (S8.pack appname) (S8.pack cmd) envs (read tarsize) tarfile tarwriter
@@ -171,26 +162,18 @@ fillJobsFromFile filepath mutex = do
   hClose h
   return ht
 
---type JobHt = H.BasicHashTable JobId (MVar Deployer)  -- job id's and their deployers
---type DeployerHt = H.BasicHashTable DeployerId (MVar Deployer)  -- deployer ids and deployers
-
-    --  send some sort of message (job status?)
-    --  if responds successfully, cool
-    --  otherwise, it's dead, need to relocate jobs that were assigned to it.
 -- Checks to see if a deployer is alive
 checkDeployer :: DeployerHt -> JobHt -> MVar Int -> MVar () -> (DeployerId, MVar Deployer) -> IO Bool
 checkDeployer deployerht jobht jobMutex nginxMutex (did, mdeployer) = do
   result <- try $ connectTo (fst did) (PortNumber $ toEnum $ snd did)
   case (result  :: Either IOException Handle) of
     Left _ -> do
-      print ("Deployer " ++ show did ++ " is down")
       return False
     Right handle -> return True
 
 readEnvs :: Handle -> IO String
 readEnvs handle = do
   str <- readEnvHelper handle ""
-  trace ("envs to be printed: " ++ str ++ "end of envs") $ return ()
   return str
   where readEnvHelper h envs = do
           line <- trim `fmap` hGetLine h

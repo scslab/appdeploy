@@ -7,7 +7,6 @@ import System.Directory
 import System.Process
 import Control.Concurrent
 import Data.List.Split
-import Debug.Trace
 import qualified Data.HashTable.IO as H
 import qualified Data.ByteString.Lazy as L
 import Data.Time.Clock
@@ -44,7 +43,6 @@ main = do
 handleConnection :: Handle -> MVar Int -> IO ()
 handleConnection h htMutex = foreverOrEOF2 h $ do
     cmd <- trim `fmap` hGetLine h
-    print cmd
     case cmd of
         "statuses" -> do  -- prints list of processes
             statusList <- atomic htMutex $ H.toList ht 
@@ -66,11 +64,9 @@ handleConnection h htMutex = foreverOrEOF2 h $ do
             putStrLn $ "ID: " ++ (show (identifier :: Int))
             envs <- readenvs h
             nbytes <- read `fmap` hGetLine h
-            print ("envs: " ++ show envs)
             tarfile <- L.hGet h nbytes
             let entries = Tar.read tarfile
             Tar.unpack tmpDir entries
-            print "unpacked entries"
             void $ forkIO $ startApp htMutex shellcmd envs tmpDir identifier 0
         "kill" -> atomic htMutex $ do  -- OK or NOT FOUND
             -- format:
@@ -94,7 +90,6 @@ startApp :: MVar Int
             -> Int                -- Retries
             -> IO ()
 startApp htMutex command envs cwdpath identifier retries = when (retries < 5) $ do 
-    trace "startApp called" $ return ()
     output <- openFile (cwdpath </> "log.out") AppendMode
     err <- openFile (cwdpath </> "log.err") AppendMode
     input <- openFile "/dev/null" ReadMode
@@ -129,22 +124,12 @@ startApp htMutex command envs cwdpath identifier retries = when (retries < 5) $ 
 
 removeFromController :: Show a => String -> a -> IO ()
 removeFromController appname identifier = do
-  trace ("removeFromController called for: " ++ appname) $ return ()
   let hostname = "localhost"  -- hostname of the app controller
       port = PortNumber 1234  -- port of the app controller
   h <- connectTo hostname port  -- handle for the app controller
   hPutStrLn h "remove"
   hPutStrLn h appname
   hPutStrLn h $ show identifier
-
-{- this used to be part of the "launch" command:
-            createDirectory tmpDir
-            tmppath <- createTempDirectory tmpDir "appdeploy"
-            Tar.unpack tmppath entries
-            void $ forkIO $ startApp htMutex shellcmd envs tmppath identifier 0
-            oldId <- modifyMVar htMutex (\a -> return (a + 1, a))
-            void $ forkIO $ startApp htMutex shellcmd env tmppath oldId 0
--}
 
 readenvs :: Handle -> IO [(String,String)]
 readenvs h = go h []
